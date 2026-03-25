@@ -103,8 +103,7 @@ public with sharing class API_ChangeRequestService {
 
     public static HttpRequestResponseModel.CRCreateResponse updateTaskStatus(Task t) {
         try {
-            //String taskName = t.Vendor_Task_Id__c;
-            String taskName;
+            String taskName = t.Customer_Rec_Id__c;
 
             if (String.isBlank(taskName)) {
                 return null;

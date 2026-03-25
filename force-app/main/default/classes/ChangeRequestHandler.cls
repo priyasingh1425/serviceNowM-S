@@ -114,8 +114,7 @@ public with sharing class ChangeRequestHandler {
     }
 
     private static Boolean isTaskEligibleForUpdate(Task oldTask, Task newTask) {
-        // return newTask.Vendor_Task_Id__c != null
-        //     && (oldTask.Status != newTask.Status || String.valueOf(oldTask.Subject) != String.valueOf(newTask.Subject));
-            return (oldTask.Status != newTask.Status || String.valueOf(oldTask.Subject) != String.valueOf(newTask.Subject));
+         return newTask.Customer_Rec_Id__c != null
+             && (oldTask.Status != newTask.Status || String.valueOf(oldTask.Subject) != String.valueOf(newTask.Subject));
     }
 }
