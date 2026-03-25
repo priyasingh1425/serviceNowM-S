@@ -136,17 +136,18 @@ public with sharing class API_ChangeRequestService {
                 return null;
             }
 
-            FeedItem notesData = [
+            List<FeedItem> notesDataList = [
                 SELECT Id, Parent.Id, Parent.Name, Type, Body, Visibility
                 FROM FeedItem
                 WHERE Id = :notes.Id
                 LIMIT 1
             ];
 
-            if (notesData == null) {
+            if (notesDataList.isEmpty()) {
                 return null;
             }
 
+            FeedItem notesData = notesDataList[0];
             String body = notesData.Body != null ? notesData.Body.toString() : '';
 
             String cleanBody = body.stripHtmlTags();

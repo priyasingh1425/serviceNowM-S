@@ -65,13 +65,6 @@ global with sharing class CityIntegrationAPI {
         return MPLResponse.error('Unsupported PATCH action: ' + action);
     }
     
-    private static final Map<String, String> PRIORITY_MAP = new Map<String, String>{
-            '1' => 'Urgent',
-            '2' => 'High',
-            '3' => 'Medium',
-            '4' => 'Low'
-        };
-    
     private static MPLResponse processCreateIncident(RestRequest req, String body, String accId, String conId, String action) {
         Id recordTypeId = Schema.SObjectType.Case.getRecordTypeInfosByDeveloperName().get('External_Customer_Support').getRecordTypeId();
         MPLRequest.CreateIncident payload = (MPLRequest.CreateIncident) JSON.deserialize(body, MPLRequest.CreateIncident.class);
@@ -320,8 +313,6 @@ global with sharing class CityIntegrationAPI {
 
     private static MPLResponse processCreateChangeRequest(RestRequest req, String body, String accId, String conId, String action) {
         Id recordTypeId = Schema.SObjectType.Case.getRecordTypeInfosByDeveloperName().get('Change_Request').getRecordTypeId();
-        Id changeTaskRecordTypeId = Schema.SObjectType.Case.getRecordTypeInfosByDeveloperName().get('Change_Task').getRecordTypeId();
-        Id taskRecordTypeId = Schema.SObjectType.Task.getRecordTypeInfosByDeveloperName().get('External_Customer_Support').getRecordTypeId();
         try {
             List<Group> queues = [SELECT Id FROM Group WHERE Name = :CityIntegrationConstants.QUEUE_TOC AND Type = 'Queue' LIMIT 1];
             if (queues.isEmpty()) {
@@ -492,10 +483,6 @@ global with sharing class CityIntegrationAPI {
 
 
     private static String getPriorityValue(String priority) {
-        if (String.isBlank(priority)) {
-            return '';
-        }
-        String mappedValue = PRIORITY_MAP.get(priority.trim().toLowerCase());
-        return String.isNotBlank(mappedValue) ? mappedValue : '';
+        return CityIntegrationConstants.getPriorityLabel(priority);
     }
 }
