@@ -470,7 +470,7 @@ global with sharing class CityIntegrationAPI {
                 successMessage += 'Change Task'+(existingChangeTaskIds.size()!=1?'s':'')+' already exist'+(existingChangeTaskIds.size()!=1?'':'s')+' and '+(existingChangeTaskIds.size()!=1?'were':'was')+' skipped: ' + String.join(new List<String>(existingChangeTaskIds), ', ');
             }
             successMessage += ' ' + action;
-            API_APIResponse_INS.createAPIResponse(req.requestURI, body, JSON.serialize(MPLResponse.successChange(successMessage, String.valueOf(insertedCase.Id), String.valueOf(insertedCase.Id))), false, 'POST', 'CityIntegrationAPI createChangeRequest', 'true', '200', 'Success', null, String.valueOf(insertedCase.Id), null);
+            API_APIResponse_INS.createAPIResponse(req.requestURI, body, JSON.serialize(MPLResponse.successChange(successMessage, insertedCase.CaseNumber, String.valueOf(insertedCase.Id))), false, 'POST', 'CityIntegrationAPI createChangeRequest', 'true', '200', 'Success', null, String.valueOf(insertedCase.Id), null);
             return MPLResponse.successChange(successMessage, insertedCase.CaseNumber, String.valueOf(insertedCase.Id));
         } catch (Exception e) {
             API_APIResponse_INS.createAPIResponse(req.requestURI, body, e.getMessage(), false, 'POST', 'CityIntegrationAPI createChangeRequest', 'false', '500', 'Error', null, null, null);
