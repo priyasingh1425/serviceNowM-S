@@ -1,17 +1,6 @@
 public with sharing class ChangeRequestHandler {
 
     public static void afterInsert(List<Case> newCases) {
-        List<Case> casesToProcess = new List<Case>();
-
-        for (Case c : newCases) {
-            if (c.Origin != CityIntegrationConstants.ORIGIN_API) {
-                casesToProcess.add(c);
-            }
-        }
-
-        if (!casesToProcess.isEmpty()) {
-            System.enqueueJob(new CreateRequestQueueable(casesToProcess, new List<Task>(), new List<FeedItem>(), false, false, false));
-        }
     }
 
     public static void afterUpdate(Map<Id, Case> oldCases, List<Case> newCases) {

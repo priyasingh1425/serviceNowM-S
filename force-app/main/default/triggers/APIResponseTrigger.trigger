@@ -34,6 +34,11 @@ trigger APIResponseTrigger on API_Response__c (after insert) {
     }
 
     if (!casesToUpdate.isEmpty()) {
-        update casesToUpdate;
+        List<Database.SaveResult> results = Database.update(casesToUpdate, false);
+        for (Database.SaveResult sr : results) {
+            if (!sr.isSuccess()) {
+                System.debug(LoggingLevel.ERROR, 'APIResponseTrigger: Failed to update Case Customer_Rec_Id__c. Error: ' + sr.getErrors()[0].getMessage());
+            }
+        }
     }
 }

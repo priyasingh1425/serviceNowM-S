@@ -6,16 +6,33 @@ global with sharing class CityIntegrationAPI {
         RestRequest req = RestContext.request;
         String action = req.params.get('apiAction');
         String body = req.requestBody.toString();
-        String accId = [Select Id from Account where Name = 'City of Minneapolis' And Status__c = 'Active' And Recordtype.Name = 'Customer' LIMIT 1].Id;
-        String conId = [Select Id from Contact where Name = 'City Of Minneapolis Service Desk' LIMIT 1].Id;
-            
+
         if (String.isBlank(action)) {
             API_APIResponse_INS.createAPIResponse(req.requestURI, body, 'Missing action parameter', false, 'POST', 'CityIntegrationAPI handlePost', 'false', '400', 'Error', null, null, null);
             return MPLResponse.error('Missing action parameter');
         }
-        
+
         System.debug('Request Body: '+ body);
-        
+
+        String accId;
+        String conId;
+        if (action == 'createIncident' || action == 'createChangeRequest') {
+            List<Account> accs = [SELECT Id FROM Account WHERE Name = :CityIntegrationConstants.ACCOUNT_NAME AND Status__c = :CityIntegrationConstants.ACCOUNT_STATUS_ACTIVE AND RecordType.Name = :CityIntegrationConstants.ACCOUNT_RT_CUSTOMER LIMIT 1];
+            if (accs.isEmpty()) {
+                API_APIResponse_INS.createAPIResponse(req.requestURI, body, 'Required account not found', false, 'POST', 'CityIntegrationAPI handlePost', 'false', '500', 'Error', null, null, null);
+                RestContext.response.statusCode = 500;
+                return MPLResponse.error('Required account not found');
+            }
+            List<Contact> cons = [SELECT Id FROM Contact WHERE Name = :CityIntegrationConstants.CONTACT_NAME LIMIT 1];
+            if (cons.isEmpty()) {
+                API_APIResponse_INS.createAPIResponse(req.requestURI, body, 'Required contact not found', false, 'POST', 'CityIntegrationAPI handlePost', 'false', '500', 'Error', null, null, null);
+                RestContext.response.statusCode = 500;
+                return MPLResponse.error('Required contact not found');
+            }
+            accId = accs[0].Id;
+            conId = cons[0].Id;
+        }
+
         if (action == 'createIncident') {
             return processCreateIncident(req, body, accId, conId, action);
         } else if (action == 'createWorkNote') {
@@ -70,7 +87,6 @@ global with sharing class CityIntegrationAPI {
             mappedCategory = 'Request';
         }
         c.Case_Type__c = mappedCategory;
-//        c.Description = payload.Description + '\n\nCategory: ' + mappedCategory + '\nSub-category: ' + (String.isNotBlank(payload.Subcategory) ? payload.Subcategory : '');
         c.Description = payload.Description + '\n\nCategory: ' + (String.isNotBlank(payload.Category) ? payload.Category : '') + '\nSub-category: ' + (String.isNotBlank(payload.Subcategory) ? payload.Subcategory : '');
         c.Subject = payload.ShortDescription;
         c.Priority_Number__c = Integer.valueOf(payload.Priority);
@@ -115,6 +131,11 @@ global with sharing class CityIntegrationAPI {
             System.debug('Entering CTASK Id parsed as: ' + customerRecId);
             if(customerRecId.length() > 1) {
                 List<Case> childCaseList = [SELECT Id FROM Case WHERE Customer_Rec_Id__c = :customerRecId and ParentId = :parentId LIMIT 1];
+                if (childCaseList.isEmpty()) {
+                    API_APIResponse_INS.createAPIResponse(req.requestURI, body, 'Change task not found: ' + customerRecId, false, 'POST', 'CityIntegrationAPI createWorkNote', 'false', '404', 'Error', null, parentId, null);
+                    RestContext.response.statusCode = 404;
+                    return MPLResponse.error('Change task not found: ' + customerRecId);
+                }
                 parentId = childCaseList[0].Id;
                 noteContent = workNoteDetails;
                 System.debug('CTASK set to: <<parentId,noteContent>> ' + '['+parentId+','+noteContent+']');
@@ -225,8 +246,8 @@ global with sharing class CityIntegrationAPI {
                     RestContext.response.statusCode = 400;
                     return MPLResponse.error(ErrorMessageBuilder.build(err));
                 }
-                API_APIResponse_INS.createAPIResponse(req.requestURI, body, JSON.serialize(MPLResponse.success('Case resolved successfully ' + action, String.valueOf(c.Id))), false, 'POST', 'CityIntegrationAPI reopenIncident', 'true', '200', 'Success', null, String.valueOf(c.Id), null);
-                return MPLResponse.success('Case resolved successfully ' + action, String.valueOf(c.Id));
+                API_APIResponse_INS.createAPIResponse(req.requestURI, body, JSON.serialize(MPLResponse.success('Case reopened successfully ' + action, String.valueOf(c.Id))), false, 'POST', 'CityIntegrationAPI reopenIncident', 'true', '200', 'Success', null, String.valueOf(c.Id), null);
+                return MPLResponse.success('Case reopened successfully ' + action, String.valueOf(c.Id));
             } catch (Exception e) {
                 System.debug('Exception: '+ e);
                 API_APIResponse_INS.createAPIResponse(req.requestURI, body, e.getMessage(), false, 'POST', 'CityIntegrationAPI reopenIncident', 'false', '500', 'Error', null, payload.IncidentRecID, null);
@@ -301,8 +322,14 @@ global with sharing class CityIntegrationAPI {
         Id recordTypeId = Schema.SObjectType.Case.getRecordTypeInfosByDeveloperName().get('Change_Request').getRecordTypeId();
         Id changeTaskRecordTypeId = Schema.SObjectType.Case.getRecordTypeInfosByDeveloperName().get('Change_Task').getRecordTypeId();
         Id taskRecordTypeId = Schema.SObjectType.Task.getRecordTypeInfosByDeveloperName().get('External_Customer_Support').getRecordTypeId();
-        Id assignedToGroup = [Select Id from Group where Name = 'TOC Queue' And Type = 'Queue' LIMIT 1].Id;
         try {
+            List<Group> queues = [SELECT Id FROM Group WHERE Name = :CityIntegrationConstants.QUEUE_TOC AND Type = 'Queue' LIMIT 1];
+            if (queues.isEmpty()) {
+                API_APIResponse_INS.createAPIResponse(req.requestURI, body, 'TOC Queue not found', false, 'POST', 'CityIntegrationAPI createChangeRequest', 'false', '500', 'Error', null, null, null);
+                RestContext.response.statusCode = 500;
+                return MPLResponse.error('TOC Queue not found');
+            }
+            Id assignedToGroup = queues[0].Id;
             MPLRequest.CreateChangeRequest payload = (MPLRequest.CreateChangeRequest) JSON.deserialize(body, MPLRequest.CreateChangeRequest.class);
 
             if (String.isNotBlank(payload.SalesforceID)
@@ -457,9 +484,7 @@ global with sharing class CityIntegrationAPI {
         } catch (Exception e) {
             API_APIResponse_INS.createAPIResponse(req.requestURI, body, e.getMessage(), false, 'POST', 'CityIntegrationAPI createChangeRequest', 'false', '500', 'Error', null, null, null);
             RestContext.response.statusCode = 500;
-            System.debug('e.get' + e.getMessage());
-            System.debug('e.get' + e.getlinenumber());
-            System.debug('e.get' + e);
+            System.debug('e.get' + e.getMessage() + ' at '+ e.getlinenumber() + ' error ' + e);
             return MPLResponse.error('An unexpected system error occurred while processing the request. Please contact support.');
         }
     }
