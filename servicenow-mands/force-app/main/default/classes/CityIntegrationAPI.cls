@@ -17,11 +17,11 @@ global with sharing class CityIntegrationAPI {
         String accId;
         String conId;
         if (action == 'createIncident' || action == 'createChangeRequest') {
-            List<Account> accs = [SELECT Id FROM Account WHERE Name = :CityIntegrationConstants.ACCOUNT_NAME AND Status__c = :CityIntegrationConstants.ACCOUNT_STATUS_ACTIVE AND RecordType.Name = :CityIntegrationConstants.ACCOUNT_RT_CUSTOMER LIMIT 1];
-            if (accs.isEmpty()) {
-                API_APIResponse_INS.createAPIResponse(req.requestURI, body, 'Required account not found', false, 'POST', 'CityIntegrationAPI handlePost', 'false', '500', 'Error', null, null, null);
+            accId = CityIntegrationConstants.ACCOUNT_ID;
+            if (accId == null) {
+                API_APIResponse_INS.createAPIResponse(req.requestURI, body, 'Required account not configured in MPL Integration Settings', false, 'POST', 'CityIntegrationAPI handlePost', 'false', '500', 'Error', null, null, null);
                 RestContext.response.statusCode = 500;
-                return MPLResponse.error('Required account not found');
+                return MPLResponse.error('Required account not configured in MPL Integration Settings');
             }
             List<Contact> cons = [SELECT Id FROM Contact WHERE Name = :CityIntegrationConstants.CONTACT_NAME LIMIT 1];
             if (cons.isEmpty()) {
@@ -29,7 +29,6 @@ global with sharing class CityIntegrationAPI {
                 RestContext.response.statusCode = 500;
                 return MPLResponse.error('Required contact not found');
             }
-            accId = accs[0].Id;
             conId = cons[0].Id;
         }
 
