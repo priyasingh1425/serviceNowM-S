@@ -1,4 +1,4 @@
-global class MPLRequest {
+public class MPLRequest {
 
     public class CreateIncident {
         public String Description;

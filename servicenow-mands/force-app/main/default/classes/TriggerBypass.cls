@@ -9,4 +9,14 @@ public class TriggerBypass {
     public static Boolean isFeedItemTriggerBypassed() {
         return bypassFeedItemTrigger;
     }
+
+    private static Boolean bypassChangeRequestHandler = false;
+
+    public static void setBypassChangeRequestHandler(Boolean bypass) {
+        bypassChangeRequestHandler = bypass;
+    }
+
+    public static Boolean isChangeRequestHandlerBypassed() {
+        return bypassChangeRequestHandler;
+    }
 }

@@ -4,11 +4,23 @@ public with sharing class ChangeRequestHandler {
     }
 
     public static void afterUpdate(Map<Id, Case> oldCases, List<Case> newCases) {
+        if (TriggerBypass.isChangeRequestHandlerBypassed()) {
+            return;
+        }
+
+        Set<Id> eligibleRtIds = new Set<Id>{
+            Schema.SObjectType.Case.getRecordTypeInfosByDeveloperName().get(CityIntegrationConstants.RT_CHANGE_REQUEST).getRecordTypeId(),
+            Schema.SObjectType.Case.getRecordTypeInfosByDeveloperName().get(CityIntegrationConstants.RT_EXTERNAL_CUSTOMER_SUPPORT).getRecordTypeId()
+        };
+
         List<Case> statusUpdateCases = new List<Case>();
         List<Case> priorityUpdateCases = new List<Case>();
         Set<Id> caseIdsForNotes = new Set<Id>();
 
         for (Case newCase : newCases) {
+            if (!eligibleRtIds.contains(newCase.RecordTypeId)) {
+                continue;
+            }
             Case oldCase = oldCases.get(newCase.Id);
 
             if (hasStatusChanged(oldCase, newCase) || isParkedWaitingForCustomer(oldCase, newCase) || hasTechnicalApprovalChanged(oldCase, newCase)) {
