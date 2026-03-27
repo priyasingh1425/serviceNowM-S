@@ -45,7 +45,9 @@ global with sharing class CityIntegrationAPI {
             return processCreateChangeRequest(req, body, accId, conId, action);  // <---- changed 'Task' to 'Case' w/"Change Task" RT
         }
 
-        return MPLResponse.success('Successfully connected ' + action, '1234567');
+        API_APIResponse_INS.createAPIResponse(req.requestURI, body, 'Unsupported POST action: ' + action, false, 'POST', 'CityIntegrationAPI handlePost', 'false', '400', 'Error', null, null, null);
+        RestContext.response.statusCode = 400;
+        return MPLResponse.error('Unsupported POST action: ' + action);
     }
     
     @HttpPatch
@@ -87,6 +89,15 @@ global with sharing class CityIntegrationAPI {
         c.Customer_Rec_Id__c = payload.APITicketID;
         c.AccountId = accId;
         c.ContactId = conId;
+
+        if (String.isNotBlank(payload.APITicketID)) {
+            List<Case> existing = [SELECT Id, CaseNumber FROM Case WHERE Customer_Rec_Id__c = :payload.APITicketID LIMIT 1];
+            if (!existing.isEmpty()) {
+                API_APIResponse_INS.createAPIResponse(req.requestURI, body, JSON.serialize(MPLResponse.incidentSuccess('Case already exists', String.valueOf(existing[0].Id), String.valueOf(existing[0].CaseNumber))), false, 'POST', 'CityIntegrationAPI createIncident', 'true', '200', 'Success', null, String.valueOf(existing[0].Id), null);
+                return MPLResponse.incidentSuccess('Case already exists', String.valueOf(existing[0].Id), String.valueOf(existing[0].CaseNumber));
+            }
+        }
+
         try {
             insert c;
             List<Case> incidentCases = [SELECT Id, CaseNumber FROM Case  WHERE Id = :c.id LIMIT 1];
@@ -108,6 +119,12 @@ global with sharing class CityIntegrationAPI {
             API_APIResponse_INS.createAPIResponse(req.requestURI, body, 'Parent Id is required', false, 'POST', 'CityIntegrationAPI createWorkNote', 'false', '400', 'Error', null, null, null);
             RestContext.response.statusCode = 400;
             return MPLResponse.error('Parent Id is required');
+        }
+
+        if (!isValidSalesforceId(parentId)) {
+            API_APIResponse_INS.createAPIResponse(req.requestURI, body, 'Invalid Salesforce ID format', false, 'POST', 'CityIntegrationAPI createWorkNote', 'false', '400', 'Error', null, null, null);
+            RestContext.response.statusCode = 400;
+            return MPLResponse.error('Invalid Salesforce ID format');
         }
         
         List<Case> cases = [SELECT Id FROM Case WHERE Id = :parentId LIMIT 1];
@@ -167,6 +184,12 @@ global with sharing class CityIntegrationAPI {
             API_APIResponse_INS.createAPIResponse(req.requestURI, body, 'Parent Id is required', false, 'POST', 'CityIntegrationAPI resolveIncident', 'false', '400', 'Error', null, null, null);
             return MPLResponse.error('Parent Id is required');
         }
+
+        if (!isValidSalesforceId(payload.IncidentRecID)) {
+            API_APIResponse_INS.createAPIResponse(req.requestURI, body, 'Invalid Salesforce ID format', false, 'POST', 'CityIntegrationAPI resolveIncident', 'false', '400', 'Error', null, null, null);
+            RestContext.response.statusCode = 400;
+            return MPLResponse.error('Invalid Salesforce ID format');
+        }
         
         List<Case> cases = [SELECT Id, Status FROM Case WHERE Id = :payload.IncidentRecID LIMIT 1];
         if (cases.isEmpty()) {
@@ -218,6 +241,12 @@ global with sharing class CityIntegrationAPI {
             API_APIResponse_INS.createAPIResponse(req.requestURI, body, 'Parent Id is required', false, 'POST', 'CityIntegrationAPI reopenIncident', 'false', '400', 'Error', null, null, null);
             return MPLResponse.error('Parent Id is required');
         }
+
+        if (!isValidSalesforceId(payload.IncidentRecID)) {
+            API_APIResponse_INS.createAPIResponse(req.requestURI, body, 'Invalid Salesforce ID format', false, 'POST', 'CityIntegrationAPI reopenIncident', 'false', '400', 'Error', null, null, null);
+            RestContext.response.statusCode = 400;
+            return MPLResponse.error('Invalid Salesforce ID format');
+        }
         
         List<Case> cases = [SELECT Id, Status FROM Case WHERE Id = :payload.IncidentRecID LIMIT 1];
         if (cases.isEmpty()) {
@@ -263,6 +292,12 @@ global with sharing class CityIntegrationAPI {
                 API_APIResponse_INS.createAPIResponse(req.requestURI, body, 'caseId and status are required', false, 'POST', 'CityIntegrationAPI updateChangeRequestApproval', 'false', '400', 'Error', null, null, null);
                 RestContext.response.statusCode = 400;
                 return MPLResponse.error('caseId and status are required');
+            }
+
+            if (!isValidSalesforceId(SalesforceID)) {
+                API_APIResponse_INS.createAPIResponse(req.requestURI, body, 'Invalid Salesforce ID format', false, 'POST', 'CityIntegrationAPI updateChangeRequestApproval', 'false', '400', 'Error', null, null, null);
+                RestContext.response.statusCode = 400;
+                return MPLResponse.error('Invalid Salesforce ID format');
             }
 
             if (!'pending deployment'.equalsIgnoreCase(status.trim())) {
@@ -481,6 +516,15 @@ global with sharing class CityIntegrationAPI {
     }
 
 
+
+    private static Boolean isValidSalesforceId(String value) {
+        try {
+            Id.valueOf(value);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
 
     private static String getPriorityValue(String priority) {
         return CityIntegrationConstants.getPriorityLabel(priority);

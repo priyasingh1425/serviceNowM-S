@@ -29,8 +29,9 @@ public with sharing class ApiResponseHelper {
     public static void logException(String logPrefix, String methodName, Exception e) {
         String errorMessage = 'An error occurred in ' + logPrefix + '.' + methodName + ' at line ' + e.getLineNumber() + ': ' + e.getMessage();
         System.debug(LoggingLevel.ERROR, errorMessage);
-        CustomException cx = new CustomException();
-        cx.message = errorMessage;
-        //CustomException.sendErrorNotification(cx);
+        API_APIResponse_INS.createAPIResponse(
+            null, null, errorMessage, false, null,
+            logPrefix + ' ' + methodName, 'false', '500', 'Exception', null, null, null
+        );
     }
 }
