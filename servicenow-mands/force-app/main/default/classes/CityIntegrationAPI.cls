@@ -42,7 +42,7 @@ global with sharing class CityIntegrationAPI {
         } else if (action == 'reopenIncident') {
             return processReopenIncident(req, body, action);
         } else if (action == 'createChangeRequest') {
-            return processCreateChangeRequest(req, body, accId, conId, action);  // <---- changed 'Task' to 'Case' w/"Change Task" RT
+            return processCreateChangeRequest(req, body, accId, conId, action);
         }
 
         API_APIResponse_INS.createAPIResponse(req.requestURI, body, 'Unsupported POST action: ' + action, false, 'POST', 'CityIntegrationAPI handlePost', 'false', '400', 'Error', null, null, null);
