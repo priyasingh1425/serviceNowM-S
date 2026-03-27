@@ -48,6 +48,7 @@ public with sharing class ChangeRequestHandler {
                 WHERE ParentId IN :caseIdsForNotes
                 AND Visibility = 'AllUsers'
                 AND Type = 'TextPost'
+                LIMIT 1000
             ];
 
             Integer remainingQueueables = Limits.getLimitQueueableJobs() - Limits.getQueueableJobs();
