@@ -52,9 +52,9 @@ public with sharing class CreateRequestQueueable implements Queueable, Database.
     }
 
     private void processCaseUpdate(Case c, String recordTypeName, Account acc) {
-        if (recordTypeName == CityIntegrationConstants.RT_CHANGE_REQUEST_LABEL) {
+        if (recordTypeName == CityIntegrationConstants.RT_CHANGE_REQUEST) {
             processChangeRequestUpdate(c, acc);
-        } else if (recordTypeName == CityIntegrationConstants.RT_EXTERNAL_CUSTOMER_SUPPORT_LABEL) {
+        } else if (recordTypeName == CityIntegrationConstants.RT_EXTERNAL_CUSTOMER_SUPPORT) {
             processExternalCustomerSupportUpdate(c, acc);
         }
     }
@@ -154,7 +154,7 @@ public with sharing class CreateRequestQueueable implements Queueable, Database.
 
     private String getRecordTypeName(Map<Id, Schema.RecordTypeInfo> rtMap, Id recordTypeId) {
         Schema.RecordTypeInfo rtInfo = rtMap.get(recordTypeId);
-        return rtInfo != null ? rtInfo.getName() : null;
+        return rtInfo != null ? rtInfo.getDeveloperName() : null;
     }
 
     private Boolean isValidFeedItem(FeedItem notes) {
