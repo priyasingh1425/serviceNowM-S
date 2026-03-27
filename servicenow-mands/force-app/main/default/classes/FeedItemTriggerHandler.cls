@@ -5,7 +5,10 @@ public with sharing class FeedItemTriggerHandler {
         }
         List<FeedItem> records = new List<FeedItem>();
         for (FeedItem record : newRecords) {
-            if (record.ParentId != null && record.ParentId.getSObjectType() == Case.SObjectType) {
+            if (record.ParentId != null
+                && record.ParentId.getSObjectType() == Case.SObjectType
+                && record.Visibility == 'AllUsers'
+                && record.Type == 'TextPost') {
                 records.add(record);
             }
         }
