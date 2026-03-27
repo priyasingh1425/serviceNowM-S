@@ -1,8 +1,5 @@
 public with sharing class ChangeRequestHandler {
 
-    public static void afterInsert(List<Case> newCases) {
-    }
-
     public static void afterUpdate(Map<Id, Case> oldCases, List<Case> newCases) {
         if (TriggerBypass.isChangeRequestHandlerBypassed()) {
             return;
