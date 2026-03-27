@@ -17,23 +17,17 @@ public with sharing class CreateRequestQueueable implements Queueable, Database.
     }
 
     public void execute(QueueableContext qc) {
-        List<Account> accounts = [
-            SELECT Id FROM Account
-            WHERE Name = :CityIntegrationConstants.ACCOUNT_NAME
-            AND RecordType.Name = :CityIntegrationConstants.ACCOUNT_RT_CUSTOMER
-            LIMIT 1
-        ];
-        if (accounts.isEmpty()) {
+        Id accountId = CityIntegrationConstants.ACCOUNT_ID;
+        if (accountId == null) {
             return;
         }
-        Account acc = accounts[0];
 
-        processCases(acc);
+        processCases(accountId);
         processTasks();
         processFeedItems();
     }
 
-    private void processCases(Account acc) {
+    private void processCases(Id accountId) {
         if (casesList.isEmpty()) {
             return;
         }
@@ -44,33 +38,33 @@ public with sharing class CreateRequestQueueable implements Queueable, Database.
             String recordTypeName = getRecordTypeName(rtMap, c.RecordTypeId);
 
             if (isCaseUpdate) {
-                processCaseUpdate(c, recordTypeName, acc);
+                processCaseUpdate(c, recordTypeName, accountId);
             } else if (priorityUpdate) {
                 API_IncidentService.updatePriorityOnIncidents(c);
             } 
         }
     }
 
-    private void processCaseUpdate(Case c, String recordTypeName, Account acc) {
-        if (recordTypeName == CityIntegrationConstants.RT_CHANGE_REQUEST_LABEL) {
-            processChangeRequestUpdate(c, acc);
-        } else if (recordTypeName == CityIntegrationConstants.RT_EXTERNAL_CUSTOMER_SUPPORT_LABEL) {
-            processExternalCustomerSupportUpdate(c, acc);
+    private void processCaseUpdate(Case c, String recordTypeName, Id accountId) {
+        if (recordTypeName == CityIntegrationConstants.RT_CHANGE_REQUEST) {
+            processChangeRequestUpdate(c, accountId);
+        } else if (recordTypeName == CityIntegrationConstants.RT_EXTERNAL_CUSTOMER_SUPPORT) {
+            processExternalCustomerSupportUpdate(c, accountId);
         }
     }
 
-    private void processChangeRequestUpdate(Case c, Account acc) {
+    private void processChangeRequestUpdate(Case c, Id accountId) {
         if (c.Status == CityIntegrationConstants.STATUS_RESOLVED) {
             API_ChangeRequestService.closeChangeRequest(c);
-        } else if (c.Technical_Approved__c == true && isEligibleForChangeRequest(c, acc)) {
+        } else if (c.Technical_Approved__c == true && isEligibleForChangeRequest(c, accountId)) {
             API_ChangeRequestService.createCR(c);
         }
     }
 
-    private void processExternalCustomerSupportUpdate(Case c, Account acc) {
+    private void processExternalCustomerSupportUpdate(Case c, Id accountId) {
         if (c.Status == CityIntegrationConstants.STATUS_RESOLVED) {
             API_IncidentService.resolveIncidents(c);
-        } else if (isEligibleForIncidentCreation(c, acc)) {
+        } else if (isEligibleForIncidentCreation(c, accountId)) {
             API_IncidentService.createIncident(c);
         } else {
             API_IncidentService.updateIncidentStatus(c);
@@ -154,7 +148,7 @@ public with sharing class CreateRequestQueueable implements Queueable, Database.
 
     private String getRecordTypeName(Map<Id, Schema.RecordTypeInfo> rtMap, Id recordTypeId) {
         Schema.RecordTypeInfo rtInfo = rtMap.get(recordTypeId);
-        return rtInfo != null ? rtInfo.getName() : null;
+        return rtInfo != null ? rtInfo.getDeveloperName() : null;
     }
 
     private Boolean isValidFeedItem(FeedItem notes) {
@@ -164,17 +158,17 @@ public with sharing class CreateRequestQueueable implements Queueable, Database.
             && notes.Type == 'TextPost';
     }
 
-    private Boolean isEligibleForChangeRequest(Case c, Account acc) {
+    private Boolean isEligibleForChangeRequest(Case c, Id accountId) {
         return c.Origin != CityIntegrationConstants.ORIGIN_API
             && CityIntegrationConstants.ELIGIBLE_PRIORITIES.contains(c.Priority)
-            && c.AccountId == acc.Id;
+            && c.AccountId == accountId;
     }
 
-    private Boolean isEligibleForIncidentCreation(Case c, Account acc) {
+    private Boolean isEligibleForIncidentCreation(Case c, Id accountId) {
         return c.Origin != CityIntegrationConstants.ORIGIN_API
             && c.Status == CityIntegrationConstants.STATUS_PARKED
             && c.Status_Reason__c == CityIntegrationConstants.STATUS_REASON_WAITING
             && CityIntegrationConstants.ELIGIBLE_PRIORITIES.contains(c.Priority)
-            && c.AccountId == acc.Id;
+            && c.AccountId == accountId;
     }
 }
