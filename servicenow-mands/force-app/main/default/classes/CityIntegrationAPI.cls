@@ -98,16 +98,19 @@ global with sharing class CityIntegrationAPI {
             }
         }
 
-        try {
-            insert c;
-            List<Case> incidentCases = [SELECT Id, CaseNumber FROM Case  WHERE Id = :c.id LIMIT 1];
-            API_APIResponse_INS.createAPIResponse(req.requestURI, body, JSON.serialize(MPLResponse.success('Case successfully created in Salesforce ' + action, String.valueOf(incidentCases[0].CaseNumber))), false, 'POST', 'CityIntegrationAPI createIncident', 'true', '200', 'Success', null, String.valueOf(incidentCases[0].Id), null);
-            return MPLResponse.incidentSuccess('Case successfully created in Salesforce ' + action, String.valueOf(incidentCases[0].Id), String.valueOf(incidentCases[0].CaseNumber));
-        } catch (Exception e) {
-            API_APIResponse_INS.createAPIResponse(req.requestURI, body, e.getMessage(), false, 'POST', 'CityIntegrationAPI createIncident', 'false', '500', 'Error', null, null, null);
-            RestContext.response.statusCode = 500;
-            return MPLResponse.error('Failed to create case: ' + e.getMessage());
+        Database.SaveResult caseSr = Database.insert(c, false);
+
+        if (!caseSr.isSuccess()) {
+            Database.Error err = caseSr.getErrors()[0];
+            System.debug(LoggingLevel.ERROR, 'Case insert failed: ' + err.getStatusCode() + ' | ' + err.getMessage());
+            API_APIResponse_INS.createAPIResponse(req.requestURI, body, ErrorMessageBuilder.build(err), false, 'POST', 'CityIntegrationAPI createIncident', 'false', '400', 'Error', null, null, null);
+            RestContext.response.statusCode = 400;
+            return MPLResponse.error(ErrorMessageBuilder.build(err));
         }
+
+        List<Case> incidentCases = [SELECT Id, CaseNumber FROM Case WHERE Id = :caseSr.getId() LIMIT 1];
+        API_APIResponse_INS.createAPIResponse(req.requestURI, body, JSON.serialize(MPLResponse.success('Case successfully created in Salesforce ' + action, String.valueOf(incidentCases[0].CaseNumber))), false, 'POST', 'CityIntegrationAPI createIncident', 'true', '200', 'Success', null, String.valueOf(incidentCases[0].Id), null);
+        return MPLResponse.incidentSuccess('Case successfully created in Salesforce ' + action, String.valueOf(incidentCases[0].Id), String.valueOf(incidentCases[0].CaseNumber));
     }
     
     private static MPLResponse processCreateWorkNote(RestRequest req, String body, String action) {
