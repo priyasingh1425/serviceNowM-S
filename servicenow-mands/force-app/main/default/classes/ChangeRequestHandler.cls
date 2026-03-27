@@ -34,11 +34,19 @@ public with sharing class ChangeRequestHandler {
         }
 
         if (!statusUpdateCases.isEmpty()) {
-            System.enqueueJob(new CreateRequestQueueable(statusUpdateCases, new List<Task>(), new List<FeedItem>(), true, false, false));
+            if (Limits.getLimitQueueableJobs() - Limits.getQueueableJobs() > 0) {
+                System.enqueueJob(new CreateRequestQueueable(statusUpdateCases, new List<Task>(), new List<FeedItem>(), true, false, false));
+            } else {
+                API_APIResponse_INS.createAPIResponse(null, null, 'Queueable limit reached — skipped status sync for ' + statusUpdateCases.size() + ' Case(s)', false, null, 'ChangeRequestHandler afterUpdate', 'false', '500', 'QueueableLimitExceeded', null, null, null);
+            }
         }
 
         if (!priorityUpdateCases.isEmpty()) {
-            System.enqueueJob(new CreateRequestQueueable(priorityUpdateCases, new List<Task>(), new List<FeedItem>(), false, false, true));
+            if (Limits.getLimitQueueableJobs() - Limits.getQueueableJobs() > 0) {
+                System.enqueueJob(new CreateRequestQueueable(priorityUpdateCases, new List<Task>(), new List<FeedItem>(), false, false, true));
+            } else {
+                API_APIResponse_INS.createAPIResponse(null, null, 'Queueable limit reached — skipped priority sync for ' + priorityUpdateCases.size() + ' Case(s)', false, null, 'ChangeRequestHandler afterUpdate', 'false', '500', 'QueueableLimitExceeded', null, null, null);
+            }
         }
 
         if (!caseIdsForNotes.isEmpty()) {
@@ -52,18 +60,27 @@ public with sharing class ChangeRequestHandler {
             ];
 
             Integer remainingQueueables = Limits.getLimitQueueableJobs() - Limits.getQueueableJobs();
-            if (feedItems.size() <= remainingQueueables) {
+            if (remainingQueueables <= 0) {
+                API_APIResponse_INS.createAPIResponse(null, null, 'Queueable limit reached — skipped work note sync for ' + feedItems.size() + ' FeedItem(s)', false, null, 'ChangeRequestHandler afterUpdate', 'false', '500', 'QueueableLimitExceeded', null, null, null);
+            } else if (feedItems.size() <= remainingQueueables) {
                 for (FeedItem feedItem : feedItems) {
                     System.enqueueJob(new CreateRequestQueueable(new List<Case>(), new List<Task>(), new List<FeedItem>{feedItem}, false, false, false));
                 }
             } else {
-                for (Integer i = 0; i < feedItems.size(); i += CityIntegrationConstants.MAX_FEEDITEMS_PER_QUEUEABLE) {
+                Integer batchesEnqueued = 0;
+                for (Integer i = 0; i < feedItems.size() && batchesEnqueued < remainingQueueables; i += CityIntegrationConstants.MAX_FEEDITEMS_PER_QUEUEABLE) {
                     Integer endIndex = Math.min(i + CityIntegrationConstants.MAX_FEEDITEMS_PER_QUEUEABLE, feedItems.size());
                     List<FeedItem> batch = new List<FeedItem>();
                     for (Integer j = i; j < endIndex; j++) {
                         batch.add(feedItems[j]);
                     }
                     System.enqueueJob(new CreateRequestQueueable(new List<Case>(), new List<Task>(), batch, false, false, false));
+                    batchesEnqueued++;
+                }
+                Integer totalBatchesPossible = (Integer) Math.ceil((Decimal) feedItems.size() / CityIntegrationConstants.MAX_FEEDITEMS_PER_QUEUEABLE);
+                if (batchesEnqueued < totalBatchesPossible) {
+                    Integer skippedItems = feedItems.size() - (batchesEnqueued * CityIntegrationConstants.MAX_FEEDITEMS_PER_QUEUEABLE);
+                    API_APIResponse_INS.createAPIResponse(null, null, 'Queueable limit reached — skipped work note sync for ~' + skippedItems + ' FeedItem(s) (' + batchesEnqueued + '/' + totalBatchesPossible + ' batches enqueued)', false, null, 'ChangeRequestHandler afterUpdate', 'false', '500', 'QueueableLimitExceeded', null, null, null);
                 }
             }
         }
@@ -81,7 +98,11 @@ public with sharing class ChangeRequestHandler {
         }
 
         if (!tasksToUpdate.isEmpty()) {
-            System.enqueueJob(new CreateRequestQueueable(new List<Case>(), tasksToUpdate, new List<FeedItem>(), false, true, false));
+            if (Limits.getLimitQueueableJobs() - Limits.getQueueableJobs() > 0) {
+                System.enqueueJob(new CreateRequestQueueable(new List<Case>(), tasksToUpdate, new List<FeedItem>(), false, true, false));
+            } else {
+                API_APIResponse_INS.createAPIResponse(null, null, 'Queueable limit reached — skipped task sync for ' + tasksToUpdate.size() + ' Task(s)', false, null, 'ChangeRequestHandler afterTaskUpdate', 'false', '500', 'QueueableLimitExceeded', null, null, null);
+            }
         }
     }
 

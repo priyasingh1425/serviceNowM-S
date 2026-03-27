@@ -14,7 +14,11 @@ public with sharing class FeedItemTriggerHandler {
         }
 
         if (!records.isEmpty()) {
-            System.enqueueJob(new CreateRequestQueueable(new List<Case>(), new List<Task>(), records, false, false, false));
+            if (Limits.getLimitQueueableJobs() - Limits.getQueueableJobs() > 0) {
+                System.enqueueJob(new CreateRequestQueueable(new List<Case>(), new List<Task>(), records, false, false, false));
+            } else {
+                API_APIResponse_INS.createAPIResponse(null, null, 'Queueable limit reached — skipped work note sync for ' + records.size() + ' FeedItem(s)', false, null, 'FeedItemTriggerHandler afterInsert', 'false', '500', 'QueueableLimitExceeded', null, null, null);
+            }
         }
     }
 }
