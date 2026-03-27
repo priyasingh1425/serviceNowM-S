@@ -1,0 +1,618 @@
+Enterprise Architecture Review – US-0000034
+Branch: feature/US-0000034 (salesforce-copado)
+Review Date: 2026-03-26
+Scope: ~1,900 lines added across 46 files – Bi-directional Salesforce/ServiceNow integration
+via Mulesoft for City of Minneapolis
+
+Verdict: Pull Not Approved
+This changeset is a solid start at a bi-directional ServiceNow integration, and the overall
+approach — Queueable for outbound callouts, REST API for inbound, Mulesoft as middleware
+— is sound. However, there are several areas that need to be addressed before this can move
+forward to UAT. The most critical concern is security — the inbound API lacks input validation
+and exposes internal implementation details on failure. Beyond that, there are bugs in bulk
+safety and data integrity that need attention — these are not issues that UAT will catch, and
+deploying them to a shared environment risks impacting other automation and integrations in
+the org.
+Blockers
+# Category Area Issue
+1 Security Inbound
+API
+
+No input validation on Salesforce IDs — malformed IDs leak Apex stack traces to the caller. MPLRequest is
+unnecessarily global . Request payloads logged unconditionally to debug logs.
+
+2 Bug Bulk
+Safety
+
+Integration fires on every Case update in the org with no early filtering by Account or Record Type.
+Priority updates will attempt Mulesoft callouts for non-Minneapolis Cases. Bulk operations on Cases will
+consume async job capacity org-wide.
+
+3 Bug Error
+Handling
+Every outbound Mulesoft callout fails silently — null returns are never checked, failures only go to
+System.debug() . The integration will fall out of sync with ServiceNow with no visibility into when or why.
+
+4 Bug Data
+Integrity
+Race condition: when APIResponseTrigger stamps a CHG/INC number on a Case, it re-fires
+ChangeRequestHandler , which syncs all historical Chatter posts to ServiceNow as work notes.
+
+5 Bug Data
+Integrity
+
+createIncident has no idempotency — Mulesoft retries will create duplicate Cases.
+createChangeRequest already has this check; incidents should match.
+
+6 Bug Inbound
+API
+
+Unmatched apiAction returns MPLResponse.success(... '1234567') — a 200 OK with a hardcoded fake
+record ID instead of an error.
+
+Additional Concerns
+Beyond the blockers, there are best practice and architectural items that should be addressed
+to ensure long-term maintainability — detailed in the findings below. These are categorized as
+Best Practice or Recommendation to help prioritize.
+Full findings follow below.
+
+Table of Contents
+1. Security
+2. Error Handling & Resilience
+3. Bulk & Batch Safety
+4. Governor Limit Risks
+5. Architectural Concerns
+6. Naming Conventions
+7. Code Quality & Tech Debt
+8. Testing
+9. Data Integrity
+10. Observability & Operations
+11. Deployment Risk
+12. Mulesoft Considerations
+13. Scorecard
+
+1.Security
+
+Security No Input Validation on Inbound API
+CityIntegrationAPI deserializes inbound JSON and passes values like
+payload.IncidentRecID and payload.ParentRecID directly into SOQL queries without
+validating they are well-formed 18-character Salesforce IDs. Examples:
+processResolveIncident — WHERE Id = :payload.IncidentRecID
+processCreateWorkNote — WHERE Id = :parentId
+processReopenIncident — WHERE Id = :payload.IncidentRecID
+Bind variables prevent SOQL injection, but malformed IDs (e.g., "abc123" ) will throw an
+unhandled System.StringException that returns a 500 with a raw Apex stack trace to the
+caller, leaking internal implementation details.
+Security Unnecessary Global Access Modifier on MPLRequest
+CityIntegrationAPI is a @RestResource class declared global , and MPLResponse is its
+return type — so MPLResponse being global is required. However, MPLRequest is also
+
+declared global even though it is only used internally for JSON.deserialize() within
+CityIntegrationAPI . It should be public . Deploying it as global unnecessarily exposes
+the class across namespace boundaries and cannot be downgraded once in production.
+Recommendation Action-Level Authorization
+CityIntegrationAPI routes all inbound requests through a single @RestResource endpoint
+with an apiAction query parameter. Any authenticated API user (via Connected App) can call
+any action — createIncident , resolveIncident , reopenIncident , createChangeRequest .
+If the Connected App and Permission Set are properly scoped, this is acceptable. However, if
+multiple external systems share the same Connected App, consider adding action-level checks
+to limit which callers can invoke which actions.
+
+Security Request Payloads Logged to Debug Logs
+CityIntegrationAPI.handlePost() and handlePatch() both call System.debug('Request
+Body: '+ body) unconditionally. Debug logs are accessible to any admin with the “Manage
+Users” permission and can be retained for up to 24 hours. If request payloads contain PII or
+sensitive customer data, this creates an exposure. This should be gated behind a custom
+setting flag or removed.
+
+2. Error Handling & Resilience
+
+Bug Silent Failures on Outbound Callouts
+Every method in API_ChangeRequestService and API_IncidentService catches Exception
+and returns null . The callers in CreateRequestQueueable never check the return value. If a
+Mulesoft callout fails, the failure is logged to System.debug() only — no record is created, no
+retry is attempted, no one is notified.
+Specific examples:
+
+// API_ChangeRequestService.cls
+} catch (Exception e) {
+ApiResponseHelper.logException(LOG_PREFIX, 'createCR', e);
+return null; // caller never checks this
+}
+
+java
+
+This means if Mulesoft returns a 500, a timeout, or a network error, the Case update completes
+successfully in Salesforce but the corresponding ServiceNow record is never created/updated.
+The systems silently fall out of sync.
+At minimum, the queueable should check return values and log failures to API_Response__c —
+the logging object already exists and is used on the happy path.
+Recommendation Retry Mechanism
+There is no retry logic for transient HTTP failures (timeouts, 503 Service Unavailable, rate
+limiting). Once a callout fails, that data is lost. A full retry / dead letter queue is a significant
+architectural pattern and may not be expected for an initial build, but it should be on the
+roadmap for production readiness.
+Best Practice Broad Exception Catching
+Every outbound service method catches Exception (the base class) rather than specific
+exception types like CalloutException or JSONException . This suppresses programming
+errors ( NullPointerException , TypeException ) that indicate bugs in the code, making them
+invisible in production.
+Recommendation Circuit Breaker
+If Mulesoft is unavailable, every Case/Task/FeedItem update for the City of Minneapolis
+account will enqueue a CreateRequestQueueable that makes a callout and fails. There is no
+mechanism to detect repeated failures and stop enqueuing callouts until the downstream
+system recovers. Under high Case volume, this could exhaust the org’s async job limits. A
+circuit breaker (e.g., a Custom Setting flag that disables callouts when Mulesoft is known to be
+down) would mitigate this.
+
+3.Bulk & Batch Safety
+
+Bug No Early Filtering — Integration Fires on Every Case
+// CreateRequestQueueable.cls
+API_ChangeRequestService.closeChangeRequest(c); // return value ignored
+API_IncidentService.resolveIncidents(c); // return value ignored
+API_IncidentService.updateIncidentStatus(c); // return value ignored
+
+java
+
+The trigger and handler layer has no filtering by Account, Record Type, or Origin. Every
+Case insert or update in the org passes through the integration logic regardless of whether it’s
+related to City of Minneapolis.
+The execution path:
+
+In a bulk update of 200 Cases where none are City of Minneapolis:
+1. CaseTrigger fires, passes all 200 to ChangeRequestHandler.afterUpdate
+2. Handler iterates all 200, adds every case with a status or priority change to processing
+lists
+3. Enqueues up to 3 queueables containing irrelevant cases
+4. Each queueable runs, queries for the City of Minneapolis account, loops through cases,
+and discards them all
+This wastes queueable job slots, SOQL queries, and CPU time on every Case transaction in the
+org — whether it’s a data migration, a batch job, or normal user activity.
+Bug Priority Updates Skip Account Check Entirely
+The account filtering inside CreateRequestQueueable only applies to some paths. For priority
+updates, cases are routed directly to API_IncidentService.updatePriorityOnIncidents with
+no account or record type check:
+
+updatePriorityOnIncidents only null-checks Customer_Rec_Id__c inside the service
+method. Any Case in the org with a value in Customer_Rec_Id__c that gets a priority change
+will trigger a Mulesoft callout — regardless of account, record type, or origin.
+Same Problem Across All Triggers
+Every trigger in this changeset fires on all records with no early exit:
+CaseTrigger (ALL cases)
+-> ChangeRequestHandler.afterUpdate (ALL cases)
+-> iterates ALL cases, checks for field changes
+-> enqueues Queueable with non-Minneapolis cases included
+-> CreateRequestQueueable.execute (finally checks Account)
+-> cases don't match, does nothing
+
+// CreateRequestQueueable.processCases
+} else if (priorityUpdate) {
+API_IncidentService.updatePriorityOnIncidents(c); // no account/RT filter
+}
+
+java
+
+Trigger Fires On Filters By
+
+CaseTrigger -> ChangeRequestHandler All Case updates Nothing — enqueues queueable, filters inside queueable
+FeedItemTrigger ->
+FeedItemTriggerHandler
+
+All FeedItems on all Cases Nothing — enqueues queueable, filters by Customer_Rec_Id__c at
+
+execution
+
+ChangetaskTrigger ->
+ChangeRequestHandler
+
+All Task updates Only Customer_Rec_Id__c != null
+
+APIResponseTrigger All API_Response__c
+
+inserts
+
+Checks Message__c and Code__c values
+
+WhatIt Should Do
+Filtering should happen at the handler level before any queueable is enqueued. The handler
+should check the Account/Record Type of the Cases and exit early for non-applicable records.
+HelperCaseTrigger.validateRequiredFields is the one place in this changeset that does this
+correctly — it checks Record Type and Account before doing any work. The same pattern
+should be applied to ChangeRequestHandler .
+Impact on Bulk Operations
+Any bulk operation that touches Cases will be affected:
+Data migrations/loads — bulk inserts or updates will enqueue unnecessary queueables
+for every batch of 200
+Batch Apex jobs — any batch that updates Case status or priority will compete for
+queueable job limits
+Flow/Process Builder bulk updates — scheduled actions or mass updates will trigger the
+integration for every record
+Data loader operations — routine maintenance updates will fire the handler on all records
+In an org with significant Case volume, this pattern consumes async job capacity that other
+integrations and automation depend on.
+
+4. Governor Limit Risks
+
+Best Practice Multiple Queueables Per Trigger Execution
+ChangeRequestHandler.afterUpdate can enqueue up to 3 separate Queueable jobs in a
+single trigger execution:
+1. Status update cases
+2. Priority update cases
+
+3. One or more FeedItem sync jobs
+The org-wide limit is 50 queueable jobs per transaction, shared with all other automation. Only
+the FeedItem path checks Limits.getLimitQueueableJobs() — the status and priority paths
+do not.
+Best Practice Unbounded FeedItem Query
+ChangeRequestHandler.afterUpdate queries all matching FeedItems with no LIMIT clause:
+
+A Case with a large Chatter history could return thousands of records, hitting heap size limits.
+Best Practice Fragile Queueable Chaining
+CreateRequestQueueable.processFeedItems processes one FeedItem per execution and
+chains to a new queueable for the rest. If any link in the chain throws an unhandled exception,
+all remaining FeedItems in that chain are lost with no way to recover them.
+
+5.Architectural Concerns
+
+Best Practice Bypasses Existing Trigger Framework
+The org has an established trigger handler framework already in use. This changeset ignores it
+entirely and wires ChangeRequestHandler directly into CaseTrigger.trigger via static
+method calls. This creates two competing trigger patterns in the same org, making it unclear
+which pattern future developers should follow. Salesforce best practice is one trigger per
+object delegating to a handler framework — mixing patterns increases maintenance complexity
+and makes trigger execution order harder to reason about.
+Best Practice Change Tasks Modeled as Child Cases
+The commented-out code in CityIntegrationAPI.processCreateChangeRequest shows this
+was originally built using standard Task objects, then pivoted to child Cases. Both parent
+List<FeedItem> feedItems = [
+SELECT Id, ParentId, Body, Visibility, Type
+FROM FeedItem
+WHERE ParentId IN :caseIdsForNotes
+AND Visibility = 'AllUsers'
+AND Type = 'TextPost'
+];
+
+java
+
+Change Requests and child Change Tasks use the same Change_Request record type. This
+means:
+No way to distinguish a Change Request from a Change Task by record type
+Change Tasks appear in Case reports, dashboards, and list views alongside real Cases
+Case assignment rules, escalation rules, and sharing rules apply to Change Tasks
+unintentionally
+Case metrics (open case count, average resolution time) are inflated
+Recommendation Hardcoded to a Single Customer
+CityIntegrationConstants hardcodes ACCOUNT_NAME = 'City of Minneapolis' and
+CONTACT_NAME = 'City Of Minneapolis Service Desk' . Every query in the integration filters
+by these literal strings:
+CityIntegrationAPI.handlePost
+CreateRequestQueueable.execute
+HelperCaseTrigger.validateRequiredFields
+If this integration will only ever serve one customer, constants are pragmatic. If the account is
+renamed, merged, or if a second customer requires ServiceNow integration, all of these
+queries break. Custom Metadata Types would make this configurable without code changes.
+Best Practice Record Type Compared by Label Instead of Developer Name
+CreateRequestQueueable.processCaseUpdate determines the Case Record Type using
+.getName() , which returns the label:
+
+This label is then compared against hardcoded strings:
+
+Salesforce best practice is to reference Record Types by Developer Name, not label. Labels
+can be changed by admins or translated in multi-language orgs, breaking this comparison
+silently. The inbound API ( CityIntegrationAPI ) already does this correctly using
+getRecordTypeInfosByDeveloperName() — the outbound path should match.
+private String getRecordTypeName(Map<Id, Schema.RecordTypeInfo> rtMap, Id recordTypeId) {
+Schema.RecordTypeInfo rtInfo = rtMap.get(recordTypeId);
+return rtInfo != null ? rtInfo.getName() : null; // returns LABEL
+}
+
+if (recordTypeName == CityIntegrationConstants.RT_CHANGE_REQUEST_LABEL) { // 'Change Request'
+java
+
+java
+
+Recommendation 490-Line God Class
+CityIntegrationAPI is a single class handling 5 distinct inbound API actions with inline
+SOQL, DML, business logic, error handling, and response formatting. Each action
+( processCreateIncident , processCreateWorkNote , processResolveIncident ,
+processReopenIncident , processCreateChangeRequest ) would benefit from extraction into
+its own service class for independent testing and maintenance. This is a longer-term refactor
+and not blocking for UAT, but it contributes to the untestable design noted in Section 8.
+
+6. Naming Conventions
+
+Recommendation No Domain-Based Naming
+All functionality in this changeset flows from the Case object — the Case trigger fires the
+handler, which enqueues the queueable, which calls the services. The class names don’t
+reflect this shared domain. They use inconsistent prefixes, generic names, and unexplained
+acronyms.
+Inconsistent “API” Casing
+The changeset uses three different conventions for the same concept:
+API_ChangeRequestService — screaming case prefix with underscore
+ApiResponseHelper — PascalCase, no underscore
+CityIntegrationAPI — screaming case suffix
+Generic Names That Will Collide
+Class Risk
+ErrorMessageBuilder Only handles DML Database.Error formatting for this integration, but the name implies an org-wide utility.
+
+The next team will either create a duplicate or add unrelated logic here.
+
+TriggerBypass Contains a single static boolean for FeedItem bypass, but the name implies a universal trigger bypass
+framework. Next developer adds their bypass flag here instead of scoping it to their feature.
+
+HttpRequestResponseModel Contains ServiceNow-specific DTOs ( CRCreateRequest , CreateIncidents , ResolveIncident ) but the name
+
+gives no indication of what system or integration it belongs to.
+
+Unexplained Acronyms
+MPLRequest and MPLResponse — “MPL” is never defined anywhere in the code or comments.
+Future developers must read the class internals to understand what these represent.
+Recommended: Domain-First Naming
+
+Since everything originates from Case, use the pattern {Domain}{Purpose}{Pattern} :
+
+Current Recommended
+
+CityIntegrationAPI CaseServiceNowApi
+API_ChangeRequestService CaseChangeRequestService
+API_IncidentService CaseIncidentService
+ChangeRequestHandler CaseServiceNowHandler
+CreateRequestQueueable CaseServiceNowQueueable
+CityIntegrationConstants CaseServiceNowConstants
+HttpRequestResponseModel CaseServiceNowModels
+ApiResponseHelper CaseServiceNowResponseHelper
+MPLRequest CaseServiceNowInboundRequest
+MPLResponse CaseServiceNowInboundResponse
+ErrorMessageBuilder CaseDmlErrorBuilder
+FeedItemTriggerHandler CaseFeedItemHandler
+TriggerBypass CaseFeedItemBypass
+APIResponseTrigger CaseApiResponseTrigger
+ChangetaskTrigger CaseTaskTrigger
+FeedItemTrigger CaseFeedItemTrigger
+This reads naturally:
+CaseServiceNowApi — “the API that connects Cases to ServiceNow”
+CaseChangeRequestService — “the service that handles change requests for Cases”
+CaseServiceNowQueueable — “the async job that sends Case data to ServiceNow”
+Exception: MulesoftApiClient is acceptable as-is — it’s a generic HTTP utility not tied to
+Case and could legitimately be reused by other integrations.
+Benefits
+Type “Case” in Setup > Apex Classes and every class in this integration appears together
+A new developer can identify the full surface area without opening any files
+No ambiguous prefixes or acronyms that require tribal knowledge
+Self-documenting — the class name tells you what object it touches and what system it
+integrates with
+
+7. Code Quality & Tech Debt
+
+Best Practice Empty Method Wired Into Trigger
+
+ChangeRequestHandler.afterInsert is called from CaseTrigger on every Case insert but the
+method body is empty:
+
+This adds trigger overhead with no functionality. Either implement it or remove it and the
+corresponding trigger wiring.
+Best Practice Orphaned Private Method
+API_IncidentService.toPlainText is a private method that is never called anywhere in the
+class. The codebase uses Salesforce’s built-in .stripHtmlTags() method instead (e.g., in
+API_ChangeRequestService.buildCreateCRPayload ). This is dead code that should be
+removed.
+
+Best Practice Commented-Out Code
+Multiple files contain commented-out code from the Task-to-Case pivot that was never
+cleaned up:
+
+CityIntegrationAPI.processCreateChangeRequest — ~8 lines of commented-out Task-
+based logic ( //List<Task> tasksToInsert , //ct.WhatId = insertedCase.Id ,
+
+//ct.Priority = ... , //.Priority = taskPayload.Priority , //ct.Type = 'Normal' ,
+//ct.Case_Classification__c = 'Configuration' )
+ApiResponseHelper.logException — //CustomException.sendErrorNotification(cx) is
+commented out, and the CustomException object created on the line above it is never
+used
+CityIntegrationAPI.processResolveIncident — //c.Auto_Close_Date__c =
+Date.today();
+Commented-out code creates confusion about intent — is it temporarily disabled, planned for
+future use, or leftover from a discarded approach? It should be removed. Version control
+preserves the history.
+Best Practice Developer Notes Leftin Code
+CityIntegrationAPI contains an inline comment meant for the development team, not
+production:
+public static void afterInsert(List<Case> newCases) {
+}
+
+java
+
+This should be removed before deployment.
+Bug Hardcoded Test Value on Unmatched Action
+If handlePost receives an apiAction value that doesn’t match any of the 5 known actions, it
+falls through to:
+
+This returns a success response with a hardcoded fake record ID ( '1234567' ) for any
+unrecognized action. An invalid API call gets a 200 OK instead of an error. This should return
+an error response indicating the action is unsupported — the same way handlePatch already
+does.
+Recommendation Dead PATCH Endpoint
+CityIntegrationAPI.handlePatch is a fully wired @HttpPatch endpoint that accepts
+requests but returns an error for every action:
+
+If PATCH is not supported, the method should not exist. Deploying a stub endpoint that always
+errors creates confusion about what the API supports and adds unnecessary code to maintain.
+Best Practice Inconsistent DML Error Handling
+The inbound API uses two different DML patterns for the same type of operation:
+processCreateIncident uses insert c (all-or-nothing) — a DML failure throws an
+exception caught by a generic catch block that returns a 500
+processCreateChangeRequest uses Database.insert(c, false) (partial success) —
+checks caseSr.isSuccess() and returns a structured error
+Both are inserting Cases from inbound API requests. The error handling should be consistent
+— callers get different error response formats depending on which action they call.
+Recommendation Dead Parameter on MulesoftApiClient
+return processCreateChangeRequest(req, body, accId, conId, action); // <---- changed 'Task' to
+'Case' w/"Change Task" RT
+
+return MPLResponse.success('Successfully connected ' + action, '1234567');
+
+return MPLResponse.error('Unsupported PATCH action: ' + action);
+
+java
+
+java
+
+java
+
+MulesoftApiClient.sendRequest accepts a type parameter that is never used in the method
+body:
+
+Every caller passes a value ( 'changeRequest' , 'incidents' ) but the method ignores it. This
+is either leftover from a removed feature or was intended for logging/routing that was never
+implemented.
+Best Practice ErrorMessageBuilder Discards Actual Error Details
+ErrorMessageBuilder.build maps Database.Error status codes to user-friendly messages
+but never includes the actual error message from err.getMessage() . The specific detail from
+Salesforce is discarded in favor of generic text like “Unable to save the record due to a system
+validation error.” This makes debugging production issues harder — the API caller gets a
+friendly message but the actual cause is lost.
+
+8. Testing
+
+Zero Test Classes
+There are no test classes in this changeset. For ~1,900 lines of new Apex including triggers, a
+REST API, queueables, and HTTP callouts, this means:
+No HttpCalloutMock implementations for the 8 distinct Mulesoft callout methods
+No test coverage for the 5 inbound REST API actions
+No negative test cases (malformed IDs, missing required fields, duplicate records,
+Mulesoft errors)
+No bulk trigger tests (200+ record inserts/updates)
+If the intent is to defer test coverage until code is finalized for UAT — the concern is that many
+of the issues identified in this review (Section 3: Bulk & Batch Safety, Section 9: Race
+Conditions) are behavioral defects that will not surface in manual UAT testing. They only
+appear under bulk data volumes, concurrent operations, or specific trigger re-entry
+sequences. Writing tests that simulate these conditions is the only reliable way to validate the
+code behaves correctly before it reaches production. Deferring tests until after the code is
+“finalized” risks finalizing code that has fundamental issues baked in — issues that are
+significantly harder and more expensive to fix after the fact than during active development.
+public static HttpDetails sendRequest(String method, String path, Map<String, String> queryParams,
+Map<String, String> headers, String body, String type) { // 'type' never referenced
+
+java
+
+Salesforce requires 75% code coverage for production deployment, but the real value of tests
+here is validating behavior, not hitting a coverage number.
+Untestable Design
+CityIntegrationAPI performs SOQL, DML, business logic, and response formatting inline in
+~490 lines. Writing meaningful tests against this class requires setting up the full data graph
+(Account, Contact, Case, Queue, Record Types, FeedItems, Approval_Participants__c) for
+every test method. Extracting business logic into testable service classes would significantly
+reduce test setup complexity and improve coverage quality. If tests are being deferred because
+the current design makes them too difficult to write, that is a signal the design needs to
+change.
+
+9. Data Integrity
+
+Bug No Idempotency on Incident Creation
+CityIntegrationAPI.processCreateIncident creates a new Case on every call with no
+duplicate checking. If Mulesoft retries a failed request (e.g., timeout where the Case was
+actually created), a duplicate Case is inserted. In contrast, processCreateChangeRequest does
+check for existing records via Customer_Rec_Id__c — this same pattern should be applied to
+incidents.
+Bug Race Condition Between APIResponseTrigger and CaseTrigger
+The following sequence creates a race condition:
+1. Case is created/updated, ChangeRequestHandler fires CreateRequestQueueable
+2. Queueable calls Mulesoft, gets back a CHG/INC number
+3. ApiResponseHelper logs an API_Response__c record
+4. APIResponseTrigger fires and stamps Customer_Rec_Id__c on the Case
+5. This Case update re-fires CaseTrigger -> ChangeRequestHandler.afterUpdate
+6. ChangeRequestHandler sees the new Customer_Rec_Id__c and queries all existing
+FeedItems to sync as work notes
+Result: every historical Chatter post on the Case gets sent to ServiceNow as a work note the
+moment the CHG/INC number is assigned. This is almost certainly unintended — only new
+FeedItems should sync.
+
+Recommendation Transactional Integrity on Outbound
+If a single Case update triggers both a status change and a priority change,
+ChangeRequestHandler.afterUpdate enqueues two independent queueables. Each makes its
+own callout to Mulesoft. If the status update callout succeeds but the priority update fails,
+ServiceNow reflects the new status but the old priority, with no mechanism to detect or
+reconcile the inconsistency. This is a hard problem in distributed systems — flagging it for
+awareness, not necessarily expecting it to be solved in v1.
+
+10. Observability & Operations
+
+Best Practice Exception Logging Bypasses API_Response__c
+The codebase has an API_APIResponse_INS class that logs to an API_Response__c custom
+object, and it’s used on the happy path. However, when an exception occurs in the outbound
+service classes, ApiResponseHelper.logException only writes to System.debug() . This
+means successful callouts are tracked in API_Response__c but failures are only visible in
+debug logs, which expire after 24 hours and require active monitoring to capture.
+Recommendation Alerting on Integration Failures
+There are no Platform Events, email alerts, custom notifications, or Slack integrations for
+callout failures. The only way to discover the integration is broken is:
+A user manually notices that a ServiceNow ticket wasn’t created
+An admin happens to be watching debug logs at the time of failure
+Someone queries API_Response__c and notices gaps (but failures aren’t logged there)
+A full alerting infrastructure may not be expected for an initial build, but at minimum, logging
+failures to API_Response__c (which already exists) would make them discoverable.
+
+11. Deployment Risk
+
+Best Practice Flow Changes
+Participant_Change_Request_Process.flow-meta.xml has structural changes to an approval
+flow that interacts with the Approval_Participants__c object — the same object that
+CityIntegrationAPI.processUpdateChangeRequestApproval modifies via DML. Flow and Apex
+
+code modifying the same object in the same transaction can cause unexpected trigger re-
+entry or conflicting field updates. This interaction needs explicit testing.
+
+12. Mulesoft Considerations
+
+Recommendation HTTP 202 Treated as Failure
+ApiResponseHelper.processApiResponse only treats HTTP 200 and 201 as success:
+
+Mulesoft commonly returns HTTP 202 (Accepted) for asynchronous processing — meaning
+Mulesoft accepted the request and will forward it to ServiceNow, but hasn’t completed yet.
+With the current code, a 202 from Mulesoft would be treated as a failure: no response object
+returned, and the API_Response__c log would record isSuccess = 'false' . This should be
+verified against the actual Mulesoft API contract.
+Recommendation Callout Timeout at Maximum
+MulesoftApiClient sets the HTTP timeout to the Salesforce maximum of 120,000ms (2
+minutes):
+
+If Mulesoft is degraded but not fully down, each callout will block for up to 2 minutes before
+timing out. In CreateRequestQueueable , multiple cases are processed sequentially in a single
+execute — one slow Mulesoft response blocks all remaining cases in that queueable
+execution. This is common practice and may be fine depending on expected volumes, but
+worth noting.
+
+13.Scorecard
+Area Rating Category Breakdown
+Security Blocker 3 Security findings, 1 Recommendation
+Error Handling Blocker 1 Bug, 1 Best Practice, 2 Recommendations
+Bulk & Batch
+Safety
+
+Blocker 2 Bugs
+
+Governor Limits Best Practice 3 Best Practice findings
+Boolean isSuccess = (statusCode == 200 || statusCode == 201);
+
+req.setTimeout(120000);
+
+java
+
+java
+
+Architecture Best Practice 3 Best Practice, 2 Recommendations
+Naming
+Conventions
+
+Recommendation All Recommendations — guidance for long-term maintainability
+
+Code Quality Best Practice 1 Bug, 5 Best Practice, 2 Recommendations
+Testing Deferred Zero test classes — acceptable if intentional for UAT phase, but behavioral defects in this
+
+changeset will not surface without bulk/integration tests
+
+Data Integrity Blocker 2 Bugs, 1 Recommendation
+Observability Best Practice 1 Best Practice, 1 Recommendation
+Deployment Best Practice 1 Best Practice finding
+Mulesoft Recommendation 2 Recommendations — verify against actual API contract
