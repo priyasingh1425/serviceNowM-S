@@ -203,7 +203,6 @@ global with sharing class CityIntegrationAPI {
             c.Id = payload.IncidentRecID;
             c.Details__c = payload.CloseDescription;
             c.Status = 'Resolved';
-            //c.Auto_Close_Date__c = Date.today();
             try {
                 Database.SaveResult sr = Database.update(c, false);
                 
@@ -439,7 +438,6 @@ global with sharing class CityIntegrationAPI {
                 }
             }
 
-            //List<Task> tasksToInsert = new List<Task>();
             List<Case> changeTasksToInsert = new List<Case>();
             if (payload.tasks != null && !payload.tasks.isEmpty()) {
                 for (MPLRequest.ChangeRequestTask taskPayload : payload.tasks) {
@@ -450,19 +448,14 @@ global with sharing class CityIntegrationAPI {
 
                     Case ct = new Case();
                     ct.Support_Queue__c = 'TOC Support';
-                    //ct.RecordTypeId = changeTaskRecordTypeId;
-                    ct.RecordTypeId = recordTypeId; //Change Request RT
+                    ct.RecordTypeId = recordTypeId;
                     ct.Subject = taskPayload.Title;
                     ct.Description = taskPayload.Description;
                     ct.ParentId = insertedCase.Id;
-                    //ct.WhatId = insertedCase.Id;
                     ct.OwnerId = assignedToGroup;
-                    //ct.Priority = (taskPayload.Priority != null && taskPayload.Priority.equalsIgnoreCase('High')) ? 'High' : 'Normal';
-                    //.Priority = taskPayload.Priority;
                     ct.Customer_Rec_Id__c = taskPayload.APITicketID;
                     ct.Origin = 'API';
                     ct.Status = 'New';
-                    //ct.Type = 'Normal';
                     if(taskPayload.Priority != null){
                         ct.Priority_Number__c = Integer.valueOf(taskPayload.Priority);
                         ct.Priority = getPriorityValue(taskPayload.Priority);
@@ -476,8 +469,6 @@ global with sharing class CityIntegrationAPI {
                     ct.AccountId = accId;
                     ct.ContactId = conId;
                     ct.Case_Type__c = 'Normal';
- //                   ct.Case_Classification__c = 'Configuration';
-
                     changeTasksToInsert.add(ct);
                 }
             }
