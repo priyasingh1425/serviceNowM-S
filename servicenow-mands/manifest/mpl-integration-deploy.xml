@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Package xmlns="http://soap.sforce.com/2006/04/metadata">
+    <types>
+        <members>ApiResponseHelper</members>
+        <members>ChangeRequestHandler</members>
+        <members>CityIntegrationAPI</members>
+        <members>CityIntegrationConstants</members>
+        <members>CreateRequestQueueable</members>
+        <members>ErrorMessageBuilder</members>
+        <members>FeedItemTriggerHandler</members>
+        <members>HelperCaseTrigger</members>
+        <members>MPLRequest</members>
+        <members>TriggerBypass</members>
+        <name>ApexClass</name>
+    </types>
+    <types>
+        <members>APIResponseTrigger</members>
+        <members>CaseTrigger</members>
+        <name>ApexTrigger</name>
+    </types>
+    <types>
+        <members>MPL_Integration_Settings__c</members>
+        <name>CustomObject</name>
+    </types>
+    <types>
+        <members>MPL_Integration_Settings__c.Account_Id__c</members>
+        <members>MPL_Integration_Settings__c.Contact_Name__c</members>
+        <members>MPL_Integration_Settings__c.Queue_Name__c</members>
+        <members>MPL_Integration_Settings__c.Support_Queue_Name__c</members>
+        <name>CustomField</name>
+    </types>
+    <version>66.0</version>
+</Package>

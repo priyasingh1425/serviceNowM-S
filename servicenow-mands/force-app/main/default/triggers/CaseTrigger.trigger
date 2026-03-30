@@ -1,4 +1,4 @@
-trigger CaseTrigger on Case (after insert, before insert, after update) {
+trigger CaseTrigger on Case (before insert, after update) {
 
     HelperCaseTrigger triggerHandler = new HelperCaseTrigger();
 
@@ -6,10 +6,6 @@ trigger CaseTrigger on Case (after insert, before insert, after update) {
         triggerHandler.emailToCaseChanges(Trigger.New, Trigger.newMap);
         triggerHandler.checkForAssetBaseID(Trigger.New, Trigger.newMap);
         triggerHandler.stampCloneSource(Trigger.New);
-    }
-
-    if (Trigger.isInsert && Trigger.isAfter) {
-        ChangeRequestHandler.afterInsert(Trigger.new);
     }
 
     if (Trigger.isUpdate && Trigger.isAfter) {

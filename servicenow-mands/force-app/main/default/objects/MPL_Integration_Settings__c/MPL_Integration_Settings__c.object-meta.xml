@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomObject xmlns="http://soap.sforce.com/2006/04/metadata">
+    <customSettingsType>Hierarchy</customSettingsType>
+    <description>Configuration settings for the MPL / ServiceNow integration. Replaces hardcoded customer-specific values so they can be managed per environment without a deployment.</description>
+    <enableFeeds>false</enableFeeds>
+    <label>MPL Integration Settings</label>
+    <visibility>Protected</visibility>
+</CustomObject>

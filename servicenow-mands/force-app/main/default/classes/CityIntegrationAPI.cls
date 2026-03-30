@@ -17,11 +17,11 @@ global with sharing class CityIntegrationAPI {
         String accId;
         String conId;
         if (action == 'createIncident' || action == 'createChangeRequest') {
-            List<Account> accs = [SELECT Id FROM Account WHERE Name = :CityIntegrationConstants.ACCOUNT_NAME AND Status__c = :CityIntegrationConstants.ACCOUNT_STATUS_ACTIVE AND RecordType.Name = :CityIntegrationConstants.ACCOUNT_RT_CUSTOMER LIMIT 1];
-            if (accs.isEmpty()) {
-                API_APIResponse_INS.createAPIResponse(req.requestURI, body, 'Required account not found', false, 'POST', 'CityIntegrationAPI handlePost', 'false', '500', 'Error', null, null, null);
+            accId = CityIntegrationConstants.ACCOUNT_ID;
+            if (accId == null) {
+                API_APIResponse_INS.createAPIResponse(req.requestURI, body, 'Required account not configured in MPL Integration Settings', false, 'POST', 'CityIntegrationAPI handlePost', 'false', '500', 'Error', null, null, null);
                 RestContext.response.statusCode = 500;
-                return MPLResponse.error('Required account not found');
+                return MPLResponse.error('Required account not configured in MPL Integration Settings');
             }
             List<Contact> cons = [SELECT Id FROM Contact WHERE Name = :CityIntegrationConstants.CONTACT_NAME LIMIT 1];
             if (cons.isEmpty()) {
@@ -29,7 +29,6 @@ global with sharing class CityIntegrationAPI {
                 RestContext.response.statusCode = 500;
                 return MPLResponse.error('Required contact not found');
             }
-            accId = accs[0].Id;
             conId = cons[0].Id;
         }
 
@@ -42,7 +41,7 @@ global with sharing class CityIntegrationAPI {
         } else if (action == 'reopenIncident') {
             return processReopenIncident(req, body, action);
         } else if (action == 'createChangeRequest') {
-            return processCreateChangeRequest(req, body, accId, conId, action);  // <---- changed 'Task' to 'Case' w/"Change Task" RT
+            return processCreateChangeRequest(req, body, accId, conId, action);
         }
 
         API_APIResponse_INS.createAPIResponse(req.requestURI, body, 'Unsupported POST action: ' + action, false, 'POST', 'CityIntegrationAPI handlePost', 'false', '400', 'Error', null, null, null);
@@ -98,16 +97,19 @@ global with sharing class CityIntegrationAPI {
             }
         }
 
-        try {
-            insert c;
-            List<Case> incidentCases = [SELECT Id, CaseNumber FROM Case  WHERE Id = :c.id LIMIT 1];
-            API_APIResponse_INS.createAPIResponse(req.requestURI, body, JSON.serialize(MPLResponse.success('Case successfully created in Salesforce ' + action, String.valueOf(incidentCases[0].CaseNumber))), false, 'POST', 'CityIntegrationAPI createIncident', 'true', '200', 'Success', null, String.valueOf(incidentCases[0].Id), null);
-            return MPLResponse.incidentSuccess('Case successfully created in Salesforce ' + action, String.valueOf(incidentCases[0].Id), String.valueOf(incidentCases[0].CaseNumber));
-        } catch (Exception e) {
-            API_APIResponse_INS.createAPIResponse(req.requestURI, body, e.getMessage(), false, 'POST', 'CityIntegrationAPI createIncident', 'false', '500', 'Error', null, null, null);
-            RestContext.response.statusCode = 500;
-            return MPLResponse.error('Failed to create case: ' + e.getMessage());
+        Database.SaveResult caseSr = Database.insert(c, false);
+
+        if (!caseSr.isSuccess()) {
+            Database.Error err = caseSr.getErrors()[0];
+            System.debug(LoggingLevel.ERROR, 'Case insert failed: ' + err.getStatusCode() + ' | ' + err.getMessage());
+            API_APIResponse_INS.createAPIResponse(req.requestURI, body, ErrorMessageBuilder.build(err), false, 'POST', 'CityIntegrationAPI createIncident', 'false', '400', 'Error', null, null, null);
+            RestContext.response.statusCode = 400;
+            return MPLResponse.error(ErrorMessageBuilder.build(err));
         }
+
+        List<Case> incidentCases = [SELECT Id, CaseNumber FROM Case WHERE Id = :caseSr.getId() LIMIT 1];
+        API_APIResponse_INS.createAPIResponse(req.requestURI, body, JSON.serialize(MPLResponse.success('Case successfully created in Salesforce ' + action, String.valueOf(incidentCases[0].CaseNumber))), false, 'POST', 'CityIntegrationAPI createIncident', 'true', '200', 'Success', null, String.valueOf(incidentCases[0].Id), null);
+        return MPLResponse.incidentSuccess('Case successfully created in Salesforce ' + action, String.valueOf(incidentCases[0].Id), String.valueOf(incidentCases[0].CaseNumber));
     }
     
     private static MPLResponse processCreateWorkNote(RestRequest req, String body, String action) {
@@ -203,7 +205,6 @@ global with sharing class CityIntegrationAPI {
             c.Id = payload.IncidentRecID;
             c.Details__c = payload.CloseDescription;
             c.Status = 'Resolved';
-            //c.Auto_Close_Date__c = Date.today();
             try {
                 Database.SaveResult sr = Database.update(c, false);
                 
@@ -439,7 +440,6 @@ global with sharing class CityIntegrationAPI {
                 }
             }
 
-            //List<Task> tasksToInsert = new List<Task>();
             List<Case> changeTasksToInsert = new List<Case>();
             if (payload.tasks != null && !payload.tasks.isEmpty()) {
                 for (MPLRequest.ChangeRequestTask taskPayload : payload.tasks) {
@@ -450,19 +450,14 @@ global with sharing class CityIntegrationAPI {
 
                     Case ct = new Case();
                     ct.Support_Queue__c = 'TOC Support';
-                    //ct.RecordTypeId = changeTaskRecordTypeId;
-                    ct.RecordTypeId = recordTypeId; //Change Request RT
+                    ct.RecordTypeId = recordTypeId;
                     ct.Subject = taskPayload.Title;
                     ct.Description = taskPayload.Description;
                     ct.ParentId = insertedCase.Id;
-                    //ct.WhatId = insertedCase.Id;
                     ct.OwnerId = assignedToGroup;
-                    //ct.Priority = (taskPayload.Priority != null && taskPayload.Priority.equalsIgnoreCase('High')) ? 'High' : 'Normal';
-                    //.Priority = taskPayload.Priority;
                     ct.Customer_Rec_Id__c = taskPayload.APITicketID;
                     ct.Origin = 'API';
                     ct.Status = 'New';
-                    //ct.Type = 'Normal';
                     if(taskPayload.Priority != null){
                         ct.Priority_Number__c = Integer.valueOf(taskPayload.Priority);
                         ct.Priority = getPriorityValue(taskPayload.Priority);
@@ -476,8 +471,6 @@ global with sharing class CityIntegrationAPI {
                     ct.AccountId = accId;
                     ct.ContactId = conId;
                     ct.Case_Type__c = 'Normal';
- //                   ct.Case_Classification__c = 'Configuration';
-
                     changeTasksToInsert.add(ct);
                 }
             }

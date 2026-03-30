@@ -1,12 +1,30 @@
 public class CityIntegrationConstants {
 
-    public static final String ACCOUNT_NAME = 'City of Minneapolis';
-    public static final String CONTACT_NAME = 'City Of Minneapolis Service Desk';
+    private static MPL_Integration_Settings__c settings {
+        get {
+            if (settings == null) {
+                settings = MPL_Integration_Settings__c.getInstance();
+            }
+            return settings;
+        }
+        set;
+    }
+
+    public static Id ACCOUNT_ID {
+        get { return settings?.Account_Id__c != null ? (Id) settings.Account_Id__c : null; }
+    }
+    public static String CONTACT_NAME {
+        get { return settings?.Contact_Name__c != null ? settings.Contact_Name__c : 'City Of Minneapolis Service Desk'; }
+    }
+    public static String QUEUE_TOC {
+        get { return settings?.Queue_Name__c != null ? settings.Queue_Name__c : 'TOC Queue'; }
+    }
+    public static String SUPPORT_QUEUE_TOC {
+        get { return settings?.Support_Queue_Name__c != null ? settings.Support_Queue_Name__c : 'TOC Support'; }
+    }
+
     public static final String ACCOUNT_STATUS_ACTIVE = 'Active';
     public static final String ACCOUNT_RT_CUSTOMER = 'Customer';
-
-    public static final String QUEUE_TOC = 'TOC Queue';
-    public static final String SUPPORT_QUEUE_TOC = 'TOC Support';
 
     public static final String RT_CHANGE_REQUEST = 'Change_Request';
     public static final String RT_EXTERNAL_CUSTOMER_SUPPORT = 'External_Customer_Support';

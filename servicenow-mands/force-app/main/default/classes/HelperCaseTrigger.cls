@@ -69,27 +69,13 @@ public class HelperCaseTrigger {
     }
 
     public void validateRequiredFields(List<Case> triggerNew, Map<Id, Case> triggerNewMap) {
-        Set<Id> accountIds = new Set<Id>();
-        for (Case c : triggerNew) {
-            if (c.RecordTypeId == externalCustomerSupportRtId && c.AccountId != null) {
-                accountIds.add(c.AccountId);
-            }
-        }
-
-        if (accountIds.isEmpty()) {
+        Id integrationAccountId = CityIntegrationConstants.ACCOUNT_ID;
+        if (integrationAccountId == null) {
             return;
         }
 
-        Map<Id, Account> qualifyingAccounts = new Map<Id, Account>(
-            [SELECT Id FROM Account
-             WHERE Id IN :accountIds
-             AND Name = :CityIntegrationConstants.ACCOUNT_NAME
-             AND Status__c = :CityIntegrationConstants.ACCOUNT_STATUS_ACTIVE
-             AND RecordType.Name = :CityIntegrationConstants.ACCOUNT_RT_CUSTOMER]
-        );
-
         for (Case c : triggerNew) {
-            if (c.RecordTypeId == externalCustomerSupportRtId && qualifyingAccounts.containsKey(c.AccountId)) {
+            if (c.RecordTypeId == externalCustomerSupportRtId && c.AccountId == integrationAccountId) {
                 if (String.isBlank(c.Subject)) {
                     c.addError('Subject is required for City of Minneapolis cases.');
                 }
