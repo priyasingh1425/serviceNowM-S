@@ -2,7 +2,7 @@ public with sharing class ApiResponseHelper {
 
     public static HttpRequestResponseModel.CRCreateResponse processApiResponse(MulesoftApiClient.HttpDetails result, String logContext, String recordId) {
         Integer statusCode = result.response.getStatusCode();
-        Boolean isSuccess = (statusCode == 200 || statusCode == 201);
+        Boolean isSuccess = (statusCode == 200 || statusCode == 201 || statusCode == 202);
 
         API_APIResponse_INS.createAPIResponse(
             result.request.getEndpoint(),

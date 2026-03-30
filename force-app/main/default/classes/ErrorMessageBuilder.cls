@@ -24,14 +24,14 @@ public class ErrorMessageBuilder {
         }
 
         if (err.getStatusCode() == StatusCode.FIELD_CUSTOM_VALIDATION_EXCEPTION) {
-            return 'The record does not meet business validation rules.';
+            return 'The record does not meet business validation rules: ' + err.getMessage();
         }
 
         if (err.getFields() != null && !err.getFields().isEmpty()) {
             return 'Unable to save the record. Fields with issues: '
-                + String.join(err.getFields(), ', ');
+                + String.join(err.getFields(), ', ') + '. Detail: ' + err.getMessage();
         }
 
-        return 'Unable to save the record due to a system validation error.';
+        return 'Unable to save the record due to a system validation error: ' + err.getMessage();
     }
 }
