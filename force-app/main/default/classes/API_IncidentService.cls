@@ -76,7 +76,7 @@ public with sharing class API_IncidentService {
         try {
             String incidentNumber = c.Customer_Rec_Id__c;
 
-            if (String.isBlank(incidentNumber)) {
+            if (String.isBlank(incidentNumber) || !incidentNumber.startsWith('INC')) {
                 return null;
             }
 
@@ -99,7 +99,7 @@ public with sharing class API_IncidentService {
         try {
             String incidentNumber = c.Customer_Rec_Id__c;
 
-            if (String.isBlank(incidentNumber)) {
+            if (String.isBlank(incidentNumber) || !incidentNumber.startsWith('INC')) {
                 return null;
             }
 
@@ -122,7 +122,7 @@ public with sharing class API_IncidentService {
         try {
             String incidentNumber = c.Customer_Rec_Id__c;
 
-            if (String.isBlank(incidentNumber)) {
+            if (String.isBlank(incidentNumber) || !incidentNumber.startsWith('INC')) {
                 return null;
             }
 

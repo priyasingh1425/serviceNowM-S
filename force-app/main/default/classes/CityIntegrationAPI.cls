@@ -18,13 +18,13 @@ global with sharing class CityIntegrationAPI {
             accId = CityIntegrationConstants.ACCOUNT_ID;
             if (accId == null) {
                 API_APIResponse_INS.createAPIResponse(req.requestURI, body, 'Required account not configured in MPL Integration Settings', false, 'POST', 'CityIntegrationAPI handlePost', 'false', '500', 'Error', null, null, null);
-                RestContext.response.statusCode = 500;
+                RestContext.response.statusCode = 202;
                 return MPLResponse.error('Required account not configured in MPL Integration Settings');
             }
             List<Contact> cons = [SELECT Id FROM Contact WHERE Name = :CityIntegrationConstants.CONTACT_NAME LIMIT 1];
             if (cons.isEmpty()) {
                 API_APIResponse_INS.createAPIResponse(req.requestURI, body, 'Required contact not found', false, 'POST', 'CityIntegrationAPI handlePost', 'false', '500', 'Error', null, null, null);
-                RestContext.response.statusCode = 500;
+                RestContext.response.statusCode = 202;
                 return MPLResponse.error('Required contact not found');
             }
             conId = cons[0].Id;
@@ -70,14 +70,12 @@ global with sharing class CityIntegrationAPI {
         c.RecordTypeid = recordTypeId;
         c.Origin = 'API';
         c.Status = 'New';
-        String mappedCategory = 'Standard';
+        String mappedCategory = 'Request';
         if (payload.Category != null && (payload.Category.equalsIgnoreCase('break fix') || payload.Category.equalsIgnoreCase('breakfix'))) {
             mappedCategory = 'Break/Fix';
-        } else if (payload.Category != null && payload.Category.equalsIgnoreCase('service request')) {
-            mappedCategory = 'Request';
-        }
+        } 
         c.Case_Type__c = mappedCategory;
-        c.Description = payload.Description + '\n\nCategory: ' + (String.isNotBlank(payload.Category) ? payload.Category : '') + '\nSub-category: ' + (String.isNotBlank(payload.Subcategory) ? payload.Subcategory : '');
+        c.Description = buildIncidentDescription(payload.Category, payload.Subcategory, payload.Description);
         c.Subject = payload.ShortDescription;
         c.Priority_Number__c = parsePriorityNumber(payload.Priority);
         c.Priority = getPriorityValue(payload.Priority);
@@ -99,7 +97,7 @@ global with sharing class CityIntegrationAPI {
             Database.Error err = caseSr.getErrors()[0];
             System.debug(LoggingLevel.ERROR, 'Case insert failed: ' + err.getStatusCode() + ' | ' + err.getMessage());
             API_APIResponse_INS.createAPIResponse(req.requestURI, body, ErrorMessageBuilder.build(err), false, 'POST', 'CityIntegrationAPI createIncident', 'false', '400', 'Error', null, null, null);
-            RestContext.response.statusCode = 400;
+            RestContext.response.statusCode = 202;
             return MPLResponse.error(ErrorMessageBuilder.build(err));
         }
 
@@ -115,25 +113,24 @@ global with sharing class CityIntegrationAPI {
 
         if (String.isBlank(parentId)) {
             API_APIResponse_INS.createAPIResponse(req.requestURI, body, 'Parent Id is required', false, 'POST', 'CityIntegrationAPI createWorkNote', 'false', '400', 'Error', null, null, null);
-            RestContext.response.statusCode = 400;
+            RestContext.response.statusCode = 202;
             return MPLResponse.error('Parent Id is required');
         }
 
         if (!isValidSalesforceId(parentId)) {
-            API_APIResponse_INS.createAPIResponse(req.requestURI, body, 'Invalid Salesforce ID format', false, 'POST', 'CityIntegrationAPI createWorkNote', 'false', '400', 'Error', null, null, null);
-            RestContext.response.statusCode = 400;
-            return MPLResponse.error('Invalid Salesforce ID format');
+            API_APIResponse_INS.createAPIResponse(req.requestURI, body, 'Invalid Salesforce ID', false, 'POST', 'CityIntegrationAPI createWorkNote', 'false', '400', 'Error', null, null, null);
+            RestContext.response.statusCode = 202;
+            return MPLResponse.error('Invalid Salesforce ID');
         }
         
         List<Case> cases = [SELECT Id FROM Case WHERE Id = :parentId LIMIT 1];
         if (cases.isEmpty()) {
             API_APIResponse_INS.createAPIResponse(req.requestURI, body, 'Parent Id does not exist', false, 'POST', 'CityIntegrationAPI createWorkNote', 'false', '404', 'Error', null, parentId, null);
-            RestContext.response.statusCode = 404;
+            RestContext.response.statusCode = 202;
             return MPLResponse.error('Parent Id does not exist');
         }
      
         if(noteContent != null && noteContent.startsWith('Work Notes from CTASK')) {
-            System.debug('Entering CTASK logic...');
             String customerRecId = 'CTASK' + noteContent.substringAfter('CTASK').substringBefore(':');
             String workNoteDetails = noteContent.substringAfter(customerRecId+':').trim();
             System.debug('Entering CTASK Id parsed as: ' + customerRecId);
@@ -141,7 +138,7 @@ global with sharing class CityIntegrationAPI {
                 List<Case> childCaseList = [SELECT Id FROM Case WHERE Customer_Rec_Id__c = :customerRecId and ParentId = :parentId LIMIT 1];
                 if (childCaseList.isEmpty()) {
                     API_APIResponse_INS.createAPIResponse(req.requestURI, body, 'Change task not found: ' + customerRecId, false, 'POST', 'CityIntegrationAPI createWorkNote', 'false', '404', 'Error', null, parentId, null);
-                    RestContext.response.statusCode = 404;
+                    RestContext.response.statusCode = 202;
                     return MPLResponse.error('Change task not found: ' + customerRecId);
                 }
                 parentId = childCaseList[0].Id;
@@ -170,7 +167,7 @@ global with sharing class CityIntegrationAPI {
         } catch (Exception e) {
             TriggerBypass.setBypassFeedItemTrigger(false);
             API_APIResponse_INS.createAPIResponse(req.requestURI, body, e.getMessage(), false, 'POST', 'CityIntegrationAPI createWorkNote', 'false', '500', 'Error', null, parentId, null);
-            RestContext.response.statusCode = 500;
+            RestContext.response.statusCode = 202;
             return MPLResponse.error('Failed to create work note: ' + e.getMessage());
         } 
     }
@@ -184,51 +181,35 @@ global with sharing class CityIntegrationAPI {
         }
 
         if (!isValidSalesforceId(payload.IncidentRecID)) {
-            API_APIResponse_INS.createAPIResponse(req.requestURI, body, 'Invalid Salesforce ID format', false, 'POST', 'CityIntegrationAPI resolveIncident', 'false', '400', 'Error', null, null, null);
-            RestContext.response.statusCode = 400;
-            return MPLResponse.error('Invalid Salesforce ID format');
+            API_APIResponse_INS.createAPIResponse(req.requestURI, body, 'Invalid Salesforce ID', false, 'POST', 'CityIntegrationAPI resolveIncident', 'false', '400', 'Error', null, null, null);
+            RestContext.response.statusCode = 202;
+            return MPLResponse.error('Invalid Salesforce ID');
         }
         
         List<Case> cases = [SELECT Id, Status FROM Case WHERE Id = :payload.IncidentRecID LIMIT 1];
         if (cases.isEmpty()) {
             API_APIResponse_INS.createAPIResponse(req.requestURI, body, 'Parent Id does not exist', false, 'POST', 'CityIntegrationAPI resolveIncident', 'false', '404', 'Error', null, payload.IncidentRecID, null);
-            RestContext.response.statusCode = 404;
+            RestContext.response.statusCode = 202;
             return MPLResponse.error('Parent Id does not exist');
         }
         
-        if(cases[0].Status != null && cases[0].Status.equalsIgnoreCase('reopen')) {
-            Case c = new Case();
-            c.Id = payload.IncidentRecID;
-            c.Details__c = payload.CloseDescription;
-            c.Status = 'Resolved';
-            try {
-                Database.SaveResult sr = Database.update(c, false);
-                
-                if (!sr.isSuccess()) {
-                    Database.Error err = sr.getErrors()[0];
-                    API_APIResponse_INS.createAPIResponse(req.requestURI, body, ErrorMessageBuilder.build(err), false, 'POST', 'CityIntegrationAPI resolveIncident', 'false', '400', 'Error', null, String.valueOf(c.Id), null);
-                    RestContext.response.statusCode = 400;
-                    return MPLResponse.error(ErrorMessageBuilder.build(err));
-                }
-                
-                API_APIResponse_INS.createAPIResponse(req.requestURI, body, JSON.serialize(MPLResponse.success('Case resolved successfully ' + action, String.valueOf(c.Id))), false, 'POST', 'CityIntegrationAPI resolveIncident', 'true', '200', 'Success', null, String.valueOf(c.Id), null);
-                return MPLResponse.success('Case resolved successfully ' + action, String.valueOf(c.Id));
-                
-            } catch (Exception e) {
-                System.debug('Exception: '+ e);
-                API_APIResponse_INS.createAPIResponse(req.requestURI, body, e.getMessage(), false, 'POST', 'CityIntegrationAPI resolveIncident', 'false', '500', 'Error', null, payload.IncidentRecID, null);
-                RestContext.response.statusCode = 500;
-                return MPLResponse.error('An unexpected system error occurred. Please contact support.');
-            }
+        try {
+            FeedItem resolveNote = new FeedItem();
+            resolveNote.Body = 'The customer has RESOLVED this Incident in ServiceNow';
+            resolveNote.ParentId = cases[0].Id;
+            resolveNote.Visibility = 'AllUsers';
+            resolveNote.Type = 'TextPost';
+            TriggerBypass.setBypassFeedItemTrigger(true);
+            insert resolveNote;
+            TriggerBypass.setBypassFeedItemTrigger(false);
+            API_APIResponse_INS.createAPIResponse(req.requestURI, body, JSON.serialize(MPLResponse.success('Case resolved successfully ' + action, String.valueOf(cases[0].Id))), false, 'POST', 'CityIntegrationAPI resolveIncident', 'true', '200', 'Success', null, String.valueOf(cases[0].Id), null);
+            return MPLResponse.success('Case resolved successfully ' + action, String.valueOf(cases[0].Id));
+        } catch (Exception e) {
+            TriggerBypass.setBypassFeedItemTrigger(false);
+            API_APIResponse_INS.createAPIResponse(req.requestURI, body, e.getMessage(), false, 'POST', 'CityIntegrationAPI resolveIncident', 'false', '500', 'Error', null, payload.IncidentRecID, null);
+            RestContext.response.statusCode = 202;
+            return MPLResponse.error('An unexpected system error occurred. Please contact support.');
         }
-        else {
-            String errMsg = 'Unable to resolve due to current Case status ['+cases[0].Status+']. Can only resolve from "Reopen" status.';
-            System.debug(errMsg);
-            API_APIResponse_INS.createAPIResponse(req.requestURI, body, errMsg, false, 'POST', 'CityIntegrationAPI resolveIncident', 'false', '400', 'Error', null, payload.IncidentRecID, null);
-            RestContext.response.statusCode = 400;
-            return MPLResponse.error(errMsg);
-        }
-
     }
     
     private static MPLResponse processReopenIncident(RestRequest req, String body, String action) {
@@ -240,45 +221,62 @@ global with sharing class CityIntegrationAPI {
         }
 
         if (!isValidSalesforceId(payload.IncidentRecID)) {
-            API_APIResponse_INS.createAPIResponse(req.requestURI, body, 'Invalid Salesforce ID format', false, 'POST', 'CityIntegrationAPI reopenIncident', 'false', '400', 'Error', null, null, null);
-            RestContext.response.statusCode = 400;
-            return MPLResponse.error('Invalid Salesforce ID format');
+            API_APIResponse_INS.createAPIResponse(req.requestURI, body, 'Invalid Salesforce ID', false, 'POST', 'CityIntegrationAPI reopenIncident', 'false', '400', 'Error', null, null, null);
+            RestContext.response.statusCode = 202;
+            return MPLResponse.error('Invalid Salesforce ID');
         }
         
-        List<Case> cases = [SELECT Id, Status FROM Case WHERE Id = :payload.IncidentRecID LIMIT 1];
+        List<Case> cases = [SELECT Id, Status,Status_Reason__c FROM Case WHERE Id = :payload.IncidentRecID LIMIT 1];
         if (cases.isEmpty()) {
             API_APIResponse_INS.createAPIResponse(req.requestURI, body, 'Parent Id does not exist', false, 'POST', 'CityIntegrationAPI reopenIncident', 'false', '404', 'Error', null, payload.IncidentRecID, null);
-            RestContext.response.statusCode = 404;
+            RestContext.response.statusCode = 202;
             return MPLResponse.error('Parent Id does not exist');
         }
 
+        try{
+            FeedItem reopenNote = new FeedItem();
+            reopenNote.Body = 'The customer has REOPENED this Incident in ServiceNow';
+            reopenNote.ParentId = payload.IncidentRecID;
+            reopenNote.Visibility = 'AllUsers';
+            reopenNote.Type = 'TextPost';
+            TriggerBypass.setBypassFeedItemTrigger(true);
+            insert reopenNote;
+            TriggerBypass.setBypassFeedItemTrigger(false);
+        }catch (Exception feedEx) {
+            TriggerBypass.setBypassFeedItemTrigger(false);
+            System.debug(LoggingLevel.ERROR, 'Failed to create reopen FeedItem: ' + feedEx.getMessage());
+        }
+
         String caseStatus = cases[0].Status != null ? cases[0].Status : '';
-        if(caseStatus.equalsIgnoreCase('resolved') || caseStatus.equalsIgnoreCase('closed')) {
+        if(caseStatus.equalsIgnoreCase('resolved')) {
             Case c = new Case();
             c.Id = payload.IncidentRecID;
-            c.Status = 'Reopen';
+            c.Status = 'In Progress';
+            c.Status_Reason__c = 'Customer Responded';
             try {
                 Database.SaveResult sr = Database.update(c, false);
                 if (!sr.isSuccess()) {
                     Database.Error err = sr.getErrors()[0];
                     API_APIResponse_INS.createAPIResponse(req.requestURI, body, ErrorMessageBuilder.build(err), false, 'POST', 'CityIntegrationAPI reopenIncident', 'false', '400', 'Error', null, String.valueOf(c.Id), null);
-                    RestContext.response.statusCode = 400;
+                    RestContext.response.statusCode = 202;
                     return MPLResponse.error(ErrorMessageBuilder.build(err));
                 }
+                
                 API_APIResponse_INS.createAPIResponse(req.requestURI, body, JSON.serialize(MPLResponse.success('Case reopened successfully ' + action, String.valueOf(c.Id))), false, 'POST', 'CityIntegrationAPI reopenIncident', 'true', '200', 'Success', null, String.valueOf(c.Id), null);
                 return MPLResponse.success('Case reopened successfully ' + action, String.valueOf(c.Id));
             } catch (Exception e) {
                 System.debug('Exception: '+ e);
+                TriggerBypass.setBypassFeedItemTrigger(false);
                 API_APIResponse_INS.createAPIResponse(req.requestURI, body, e.getMessage(), false, 'POST', 'CityIntegrationAPI reopenIncident', 'false', '500', 'Error', null, payload.IncidentRecID, null);
                 RestContext.response.statusCode = 500;
                 return MPLResponse.error('An unexpected system error occurred. Please contact support.');
             }
         }
         else {
-            String errMsg = 'The Salesforce Case was not in a Resolved or Closed Status. ['+caseStatus+']';
+            String errMsg = 'The Salesforce Case was not in a Resolved. ['+caseStatus+']';
             System.debug(errMsg);
             API_APIResponse_INS.createAPIResponse(req.requestURI, body, errMsg, false, 'POST', 'CityIntegrationAPI reopenIncident', 'false', '400', 'Error', null, payload.IncidentRecID, null);
-            RestContext.response.statusCode = 400;
+            RestContext.response.statusCode = 202;
             return MPLResponse.error(errMsg);
         }
     }
@@ -287,14 +285,14 @@ global with sharing class CityIntegrationAPI {
         try {
             if (String.isBlank(SalesforceID) || String.isBlank(status)) {
                 API_APIResponse_INS.createAPIResponse(req.requestURI, body, 'caseId and status are required', false, 'POST', 'CityIntegrationAPI updateChangeRequestApproval', 'false', '400', 'Error', null, null, null);
-                RestContext.response.statusCode = 400;
+                RestContext.response.statusCode = 202;
                 return MPLResponse.error('caseId and status are required');
             }
 
             if (!isValidSalesforceId(SalesforceID)) {
-                API_APIResponse_INS.createAPIResponse(req.requestURI, body, 'Invalid Salesforce ID format', false, 'POST', 'CityIntegrationAPI updateChangeRequestApproval', 'false', '400', 'Error', null, null, null);
-                RestContext.response.statusCode = 400;
-                return MPLResponse.error('Invalid Salesforce ID format');
+                API_APIResponse_INS.createAPIResponse(req.requestURI, body, 'Invalid Salesforce ID', false, 'POST', 'CityIntegrationAPI updateChangeRequestApproval', 'false', '400', 'Error', null, null, null);
+                RestContext.response.statusCode = 202;
+                return MPLResponse.error('Invalid Salesforce ID');
             }
 
             if (!'pending deployment'.equalsIgnoreCase(status.trim())) {
@@ -307,52 +305,92 @@ global with sharing class CityIntegrationAPI {
 
             if (changeRequests.isEmpty()) {
                 API_APIResponse_INS.createAPIResponse(req.requestURI, body, 'Change request not found', false, 'POST', 'CityIntegrationAPI updateChangeRequestApproval', 'false', '404', 'Error', null, SalesforceID, null);
-                RestContext.response.statusCode = 404;
+                RestContext.response.statusCode = 202;
                 return MPLResponse.error('Change request not found');
+            }
+
+            try {
+                FeedItem approvalNote = new FeedItem();
+                approvalNote.Body = 'The customer has APPROVED this Change Request';
+                approvalNote.ParentId = changeRequests[0].Id;
+                approvalNote.Visibility = 'AllUsers';
+                approvalNote.Type = 'TextPost';
+                TriggerBypass.setBypassFeedItemTrigger(true);
+                insert approvalNote;
+                TriggerBypass.setBypassFeedItemTrigger(false);
+            } catch (Exception feedEx) {
+                TriggerBypass.setBypassFeedItemTrigger(false);
+                System.debug(LoggingLevel.ERROR, 'Failed to create approval FeedItem: ' + feedEx.getMessage());
             }
 
             List<Approval_Participants__c> customerApprovals = [SELECT Id, Status__c FROM Approval_Participants__c WHERE Case__c = :changeRequests[0].Id AND Approval_Type__c = 'Customer Approval'];
 
             if (customerApprovals.isEmpty()) {
                 API_APIResponse_INS.createAPIResponse(req.requestURI, body, 'No Customer Approval participant found for this change request', false, 'POST', 'CityIntegrationAPI updateChangeRequestStatus', 'false', '404', 'Error', null, String.valueOf(changeRequests[0].Id), null);
-                RestContext.response.statusCode = 404;
+                RestContext.response.statusCode = 202;
                 return MPLResponse.error('No Customer Approval participant found for this change request');
             }
 
-            List<Approval_Participants__c> participantsToUpdate = new List<Approval_Participants__c>();
+            List<Id> participantIdsToApprove = new List<Id>();
             for (Approval_Participants__c participant : customerApprovals) {
                 if (participant.Status__c != 'Approved') {
-                    participant.Status__c = 'Approved';
-                    participantsToUpdate.add(participant);
+                    participantIdsToApprove.add(participant.Id);
                 }
             }
 
-            if (!participantsToUpdate.isEmpty()) {
-                update participantsToUpdate;
+            if (!participantIdsToApprove.isEmpty()) {
+                List<ProcessInstanceWorkitem> workItems = [
+                    SELECT Id FROM ProcessInstanceWorkitem
+                    WHERE ProcessInstance.TargetObjectId IN :participantIdsToApprove
+                ];
+
+                if (workItems.isEmpty()) {
+                    API_APIResponse_INS.createAPIResponse(req.requestURI, body, 'No active approval work items found for participant(s)', false, 'POST', 'CityIntegrationAPI updateChangeRequestApproval', 'false', '404', 'Error', null, String.valueOf(changeRequests[0].Id), null);
+                    RestContext.response.statusCode = 202;
+                    return MPLResponse.error('No active approval work items found for the change request participants');
+                }
+
+                List<Approval.ProcessWorkitemRequest> approvalRequests = new List<Approval.ProcessWorkitemRequest>();
+                for (ProcessInstanceWorkitem workItem : workItems) {
+                    Approval.ProcessWorkitemRequest approvalReq = new Approval.ProcessWorkitemRequest();
+                    approvalReq.setWorkitemId(workItem.Id);
+                    approvalReq.setAction('Approve');
+                    approvalReq.setComments('Approved via CityIntegration API');
+                    approvalRequests.add(approvalReq);
+                }
+
+                List<Approval.ProcessResult> approvalResults = Approval.process(approvalRequests, false);
+                List<String> failedIds = new List<String>();
+                for (Approval.ProcessResult ar : approvalResults) {
+                    if (!ar.isSuccess()) {
+                        failedIds.add(ar.getEntityId());
+                    }
+                }
+                if (!failedIds.isEmpty()) {
+                    String failMsg = 'Approval processing failed for ' + failedIds.size() + ' of ' + approvalResults.size() + ' work item(s)';
+                    API_APIResponse_INS.createAPIResponse(req.requestURI, body, failMsg, false, 'POST', 'CityIntegrationAPI updateChangeRequestApproval', 'false', '500', 'Error', null, String.valueOf(changeRequests[0].Id), null);
+                    RestContext.response.statusCode = 202;
+                    return MPLResponse.error(failMsg);
+                }
             }
 
-            String successMessage = participantsToUpdate.isEmpty()
+            String successMessage = participantIdsToApprove.isEmpty()
                 ? 'Customer Approval participant already in Approved status'
                 : 'Customer Approval participant status updated to Approved ' + action;
             API_APIResponse_INS.createAPIResponse(req.requestURI, body, JSON.serialize(MPLResponse.successChange(successMessage, String.valueOf(changeRequests[0].CaseNumber), String.valueOf(changeRequests[0].Id))), false, 'POST', 'CityIntegrationAPI updateChangeRequestStatus', 'true', '200', 'Success', null, String.valueOf(changeRequests[0].Id), null);
             return MPLResponse.successChange(successMessage, String.valueOf(changeRequests[0].CaseNumber), String.valueOf(changeRequests[0].Id));
         } catch (Exception e) {
+            TriggerBypass.setBypassFeedItemTrigger(false);
             API_APIResponse_INS.createAPIResponse(req.requestURI, body, e.getMessage(), false, 'POST', 'CityIntegrationAPI updateChangeRequestStatus', 'false', '500', 'Error', null, null, null);
-            RestContext.response.statusCode = 500;
+            RestContext.response.statusCode = 202;
             return MPLResponse.error('Failed to update change request status: ' + e.getMessage());
         }
     }
 
     private static MPLResponse processCreateChangeRequest(RestRequest req, String body, String accId, String conId, String action) {
-        Id recordTypeId = Schema.SObjectType.Case.getRecordTypeInfosByDeveloperName().get('Change_Request').getRecordTypeId();
+        Id parentRecordTypeId = Schema.SObjectType.Case.getRecordTypeInfosByDeveloperName().get(CityIntegrationConstants.RT_EXTERNAL_CUSTOMER_SUPPORT).getRecordTypeId();
+        Id childRecordTypeId = Schema.SObjectType.Case.getRecordTypeInfosByDeveloperName().get(CityIntegrationConstants.RT_CHANGE_REQUEST).getRecordTypeId();
         try {
-            List<Group> queues = [SELECT Id FROM Group WHERE Name = :CityIntegrationConstants.QUEUE_TOC AND Type = 'Queue' LIMIT 1];
-            if (queues.isEmpty()) {
-                API_APIResponse_INS.createAPIResponse(req.requestURI, body, 'TOC Queue not found', false, 'POST', 'CityIntegrationAPI createChangeRequest', 'false', '500', 'Error', null, null, null);
-                RestContext.response.statusCode = 500;
-                return MPLResponse.error('TOC Queue not found');
-            }
-            Id assignedToGroup = queues[0].Id;
             MPLRequest.CreateChangeRequest payload = (MPLRequest.CreateChangeRequest) JSON.deserialize(body, MPLRequest.CreateChangeRequest.class);
 
             if (String.isNotBlank(payload.SalesforceID)
@@ -379,23 +417,18 @@ global with sharing class CityIntegrationAPI {
             } else {
                 Case c = new Case();
                 c.Support_Queue__c = CityIntegrationConstants.SUPPORT_QUEUE_TOC;
-                c.RecordTypeId = recordTypeId;
+                c.RecordTypeId = parentRecordTypeId;
                 c.Origin = 'API';
                 c.Status = 'New';
                 c.Subject = payload.ShortDescription;
-                c.Description = payload.Description;
+                c.Description = buildECSDescription(payload.ScheduledStartDate, payload.ScheduledEndDate, payload.Description);
                 c.Customer_Rec_Id__c = payload.APIChangeID;
-                c.Case_Type__c = 'Normal';
-                c.Case_Classification__c = 'Configuration';
+                c.Case_Type__c = 'Request';
                 if(payload.ScheduledStartDate != null){
                     c.Planned_Start_Date__c = DateTime.valueOf(payload.ScheduledStartDate);
                 }
                 if(payload.ScheduledEndDate != null){
                     c.Planned_Delivery_Date__c = DateTime.valueOf(payload.ScheduledEndDate);
-                }
-                if(payload.Priority != null){
-                    c.Priority_Number__c = parsePriorityNumber(payload.Priority);
-                    c.Priority = getPriorityValue(payload.Priority);
                 }
                 c.AccountId = accId;
                 c.ContactId = conId;
@@ -406,7 +439,7 @@ global with sharing class CityIntegrationAPI {
                     Database.Error err = caseSr.getErrors()[0];
                     System.debug(LoggingLevel.ERROR, 'Case insert failed: ' + err.getStatusCode() + ' | ' + err.getMessage());
                     API_APIResponse_INS.createAPIResponse(req.requestURI, body, ErrorMessageBuilder.build(err), false, 'POST', 'CityIntegrationAPI createChangeRequest', 'false', '400', 'Error', null, null, null);
-                    RestContext.response.statusCode = 400;
+                    RestContext.response.statusCode = 202;
                     return MPLResponse.error(ErrorMessageBuilder.build(err));
                 }
                 
@@ -446,11 +479,10 @@ global with sharing class CityIntegrationAPI {
 
                     Case ct = new Case();
                     ct.Support_Queue__c = CityIntegrationConstants.SUPPORT_QUEUE_TOC;
-                    ct.RecordTypeId = recordTypeId;
+                    ct.RecordTypeId = childRecordTypeId;
                     ct.Subject = taskPayload.Title;
-                    ct.Description = taskPayload.Description;
+                    ct.Description = buildChangeTaskDescription(taskPayload.ScheduledStartDate, taskPayload.ScheduledEndDate, taskPayload.Type, taskPayload.Description);
                     ct.ParentId = insertedCase.Id;
-                    ct.OwnerId = assignedToGroup;
                     ct.Customer_Rec_Id__c = taskPayload.APITicketID;
                     ct.Origin = 'API';
                     ct.Status = 'New';
@@ -479,7 +511,7 @@ global with sharing class CityIntegrationAPI {
                         Database.Error err = changeTaskSr.getErrors()[0];
                         System.debug(LoggingLevel.ERROR, 'Change Task insert failed: ' + err.getStatusCode() + ' | ' + err.getMessage());
                         API_APIResponse_INS.createAPIResponse(req.requestURI, body, ErrorMessageBuilder.build(err), false, 'POST', 'CityIntegrationAPI createChangeRequest', 'false', '400', 'Error', null, String.valueOf(insertedCase.Id), null);
-                        RestContext.response.statusCode = 400;
+                        RestContext.response.statusCode = 202;
                         return MPLResponse.error(ErrorMessageBuilder.build(err));
                     }
                 }
@@ -524,5 +556,29 @@ global with sharing class CityIntegrationAPI {
 
     private static String getPriorityValue(String priority) {
         return CityIntegrationConstants.getPriorityLabel(priority);
+    }
+
+    private static String buildIncidentDescription(String category, String subcategory, String description) {
+        String result = 'Category: ' + (String.isNotBlank(category) ? category : '') + '\n';
+        result += 'Sub-category: ' + (String.isNotBlank(subcategory) ? subcategory : '') + '\n';
+        result += '\n';
+        result += (description != null ? description : '');
+        return result;
+    }
+
+    private static String buildECSDescription(String scheduledStartDate, String scheduledEndDate, String description) {
+        String result = 'Authorized Start Date/Time (Central Time): ' + (scheduledStartDate != null ? scheduledStartDate : '') + '\n';
+        result += 'Authorized End Date/Time (Central Time): ' + (scheduledEndDate != null ? scheduledEndDate : '') + '\n';
+        result += '\n';
+        result += (description != null ? description : '');
+        return result;
+    }
+
+    private static String buildChangeTaskDescription(String scheduledStartDate, String scheduledEndDate, String type, String description) {
+        String result = 'Authorized Start Date/Time (Central Time): ' + (scheduledStartDate != null ? scheduledStartDate : '') + '\n';
+        result += 'Authorized End Date/Time (Central Time): ' + (scheduledEndDate != null ? scheduledEndDate : '') + '\n';
+        result += '\n';
+        result += (description != null ? description : '');
+        return result;
     }
 }

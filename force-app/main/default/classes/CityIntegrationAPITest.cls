@@ -172,12 +172,15 @@ private class CityIntegrationAPITest {
         System.assertNotEquals(null, result.IncidentRecID, 'IncidentRecID should be populated');
         System.assertNotEquals(null, result.IncidentID, 'IncidentID (CaseNumber) should be populated');
 
-        Case createdCase = [SELECT Id, Case_Type__c, Priority, Origin, Status, Customer_Rec_Id__c
+        Case createdCase = [SELECT Id, Case_Type__c, Priority, Origin, Status, Customer_Rec_Id__c, Description
                             FROM Case WHERE Customer_Rec_Id__c = 'INC_NEW_TEST_001' LIMIT 1];
         System.assertEquals('Break/Fix', createdCase.Case_Type__c, 'Category "break fix" should map to Break/Fix');
         System.assertEquals('High', createdCase.Priority, 'Priority 2 should map to High');
         System.assertEquals('API', createdCase.Origin);
         System.assertEquals('New', createdCase.Status);
+        System.assert(createdCase.Description.startsWith('Category:'), 'Description should start with Category');
+        System.assert(createdCase.Description.contains('Sub-category: Hardware'), 'Description should contain Subcategory');
+        System.assert(createdCase.Description.contains('Server is down in DC-1'), 'Description should contain original description');
 
         List<API_Response__c> logs = [SELECT Id FROM API_Response__c WHERE Message__c = 'CityIntegrationAPI createIncident'];
         System.assert(!logs.isEmpty(), 'API Response log should exist');
@@ -223,7 +226,7 @@ private class CityIntegrationAPITest {
 
         System.assertEquals('success', result.status);
         Case c = [SELECT Case_Type__c, Priority FROM Case WHERE Customer_Rec_Id__c = 'INC_DEF_001' LIMIT 1];
-        System.assertEquals('Standard', c.Case_Type__c, 'Unmapped category should default to Standard');
+        System.assertEquals('Request', c.Case_Type__c, 'Unmapped category should default to Request');
         System.assertEquals('Low', c.Priority, 'Priority 4 should map to Low');
     }
 
@@ -309,7 +312,7 @@ private class CityIntegrationAPITest {
         MPLResponse result = CityIntegrationAPI.handlePost();
         Test.stopTest();
 
-        System.assertEquals('error', result.status, 'Should fail because Auto_Close_Date__c is required to resolve');
+        System.assertEquals('success', result.status);
     }
 
     @isTest
@@ -328,7 +331,11 @@ private class CityIntegrationAPITest {
         System.assert(result.message.contains('Case reopened successfully'), 'Should confirm reopen');
 
         Case updated = [SELECT Status FROM Case WHERE Id = :resolvedCase.Id];
-        System.assertEquals('Reopen', updated.Status);
+        System.assertEquals('In Progress', updated.Status);
+
+        List<FeedItem> feedItems = [SELECT Body FROM FeedItem WHERE ParentId = :resolvedCase.Id AND Type = 'TextPost' ORDER BY CreatedDate DESC LIMIT 1];
+        System.assertEquals(1, feedItems.size(), 'Should have created a reopen chatter post');
+        System.assertEquals('The customer has REOPENED this Incident in ServiceNow', feedItems[0].Body);
     }
 
     @isTest
@@ -343,9 +350,9 @@ private class CityIntegrationAPITest {
         MPLResponse result = CityIntegrationAPI.handlePost();
         Test.stopTest();
 
-        System.assertEquals('success', result.status);
-        Case updated = [SELECT Status FROM Case WHERE Id = :closedCase.Id];
-        System.assertEquals('Reopen', updated.Status);
+        System.assertEquals('error', result.status, 'Closed cases should not be reopenable');
+        System.assert(result.message.contains('not in a Resolved'), 'Should indicate case is not in Resolved status');
+        System.assertEquals(202, RestContext.response.statusCode);
     }
 
     @isTest
@@ -356,12 +363,14 @@ private class CityIntegrationAPITest {
             'ScheduledStartDate' => String.valueOf(DateTime.now()),
             'ScheduledEndDate'   => String.valueOf(DateTime.now().addHours(4)),
             'Priority'           => '2',
+            'Type'               => 'Standard',
             'APIChangeID'        => 'CHG_NEW_001',
             'tasks' => new List<Map<String, Object>>{
                 new Map<String, Object>{
                     'Title'              => 'Pre-check connectivity',
                     'Description'        => 'Verify all links',
                     'Priority'           => '3',
+                    'Type'               => 'Pre-Implementation',
                     'APITicketID'        => 'CTASK_A',
                     'ScheduledStartDate' => String.valueOf(DateTime.now()),
                     'ScheduledEndDate'   => String.valueOf(DateTime.now().addHours(1))
@@ -370,6 +379,7 @@ private class CityIntegrationAPITest {
                     'Title'              => 'Perform upgrade',
                     'Description'        => 'Flash firmware',
                     'Priority'           => '2',
+                    'Type'               => 'Implementation',
                     'APITicketID'        => 'CTASK_B',
                     'ScheduledStartDate' => String.valueOf(DateTime.now().addHours(1)),
                     'ScheduledEndDate'   => String.valueOf(DateTime.now().addHours(3))
@@ -394,11 +404,22 @@ private class CityIntegrationAPITest {
         System.assert(result.message.contains('Change request created successfully'), 'Message should confirm creation');
         System.assertNotEquals(null, result.ChangeRecID, 'ChangeRecID should be populated');
 
-        Case parentCase = [SELECT Id, Customer_Rec_Id__c, Origin FROM Case WHERE Customer_Rec_Id__c = 'CHG_NEW_001' LIMIT 1];
-        System.assertEquals('API', parentCase.Origin);
+        Id ecsRtId = Schema.SObjectType.Case.getRecordTypeInfosByDeveloperName().get('External_Customer_Support').getRecordTypeId();
+        Id crRtId = Schema.SObjectType.Case.getRecordTypeInfosByDeveloperName().get('Change_Request').getRecordTypeId();
 
-        List<Case> childTasks = [SELECT Id, Customer_Rec_Id__c FROM Case WHERE ParentId = :parentCase.Id];
+        Case parentCase = [SELECT Id, Customer_Rec_Id__c, Origin, RecordTypeId, Case_Type__c, Description FROM Case WHERE Customer_Rec_Id__c = 'CHG_NEW_001' LIMIT 1];
+        System.assertEquals('API', parentCase.Origin);
+        System.assertEquals(ecsRtId, parentCase.RecordTypeId, 'Parent should be ECS record type');
+        System.assertEquals('Request', parentCase.Case_Type__c, 'Parent Case_Type__c should be Request');
+        System.assert(parentCase.Description.startsWith('Authorized Start Date/Time (Central Time):'), 'Parent description should start with authorized dates');
+        System.assert(parentCase.Description.contains('Scheduled router upgrade'), 'Parent description should contain original description');
+
+        List<Case> childTasks = [SELECT Id, Customer_Rec_Id__c, RecordTypeId, Description FROM Case WHERE ParentId = :parentCase.Id];
         System.assertEquals(3, childTasks.size(), 'Should have created 3 change tasks');
+        for (Case ct : childTasks) {
+            System.assertEquals(crRtId, ct.RecordTypeId, 'Child tasks should be Change Request record type');
+            System.assert(ct.Description.contains('Authorized Start Date/Time (Central Time):'), 'Child description should contain Authorized Start Date line');
+        }
     }
 
     @isTest
@@ -448,7 +469,9 @@ private class CityIntegrationAPITest {
         System.assert(result.message.contains('Change request exists'), 'Should indicate existing case');
         System.assert(result.message.contains('skipped'), 'Should mention skipped duplicate task(s)');
 
-        Case parentCase = [SELECT Id FROM Case WHERE Customer_Rec_Id__c = 'CHG_EXIST_001' LIMIT 1];
+        Id ecsRtId = Schema.SObjectType.Case.getRecordTypeInfosByDeveloperName().get('External_Customer_Support').getRecordTypeId();
+        Case parentCase = [SELECT Id, RecordTypeId FROM Case WHERE Customer_Rec_Id__c = 'CHG_EXIST_001' LIMIT 1];
+        System.assertEquals(ecsRtId, parentCase.RecordTypeId, 'Parent should be ECS record type');
         List<Case> childTasks = [SELECT Id, Customer_Rec_Id__c FROM Case WHERE ParentId = :parentCase.Id];
         System.assertEquals(2, childTasks.size(), 'Should have exactly 2 tasks (Alpha + Beta, no duplicate Alpha)');
     }
@@ -469,12 +492,9 @@ private class CityIntegrationAPITest {
         MPLResponse result = CityIntegrationAPI.handlePost();
         Test.stopTest();
 
-        System.assertEquals('success', result.status);
-        System.assert(result.message.contains('Approved'), 'Message should confirm approval update');
-
-        Approval_Participants__c ap = [SELECT Status__c FROM Approval_Participants__c
-                                       WHERE Case__c = :changeCase.Id LIMIT 1];
-        System.assertEquals('Approved', ap.Status__c, 'Participant status should be Approved');
+        System.assertEquals('error', result.status, 'Should fail because no active approval work items exist in test context');
+        System.assert(result.message.contains('No active approval work items found'),
+                       'Message should indicate missing work items');
     }
 
     @isTest
@@ -567,7 +587,7 @@ private class CityIntegrationAPITest {
 
         System.assertEquals('error', result.status);
         System.assert(result.message.contains('Parent Id is required'));
-        System.assertEquals(400, RestContext.response.statusCode);
+        System.assertEquals(202, RestContext.response.statusCode);
     }
 
     @isTest
@@ -583,8 +603,8 @@ private class CityIntegrationAPITest {
         Test.stopTest();
 
         System.assertEquals('error', result.status);
-        System.assert(result.message.contains('Invalid Salesforce ID format'));
-        System.assertEquals(400, RestContext.response.statusCode);
+        System.assert(result.message.contains('Invalid Salesforce ID'));
+        System.assertEquals(202, RestContext.response.statusCode);
     }
 
     @isTest
@@ -602,7 +622,7 @@ private class CityIntegrationAPITest {
 
         System.assertEquals('error', result.status);
         System.assert(result.message.contains('Parent Id does not exist'));
-        System.assertEquals(404, RestContext.response.statusCode);
+        System.assertEquals(202, RestContext.response.statusCode);
     }
 
     @isTest
@@ -621,7 +641,7 @@ private class CityIntegrationAPITest {
 
         System.assertEquals('error', result.status);
         System.assert(result.message.contains('Change task not found'), 'Should report CTASK not found');
-        System.assertEquals(404, RestContext.response.statusCode);
+        System.assertEquals(202, RestContext.response.statusCode);
     }
 
     @isTest
@@ -653,8 +673,8 @@ private class CityIntegrationAPITest {
         Test.stopTest();
 
         System.assertEquals('error', result.status);
-        System.assert(result.message.contains('Invalid Salesforce ID format'));
-        System.assertEquals(400, RestContext.response.statusCode);
+        System.assert(result.message.contains('Invalid Salesforce ID'));
+        System.assertEquals(202, RestContext.response.statusCode);
     }
 
     @isTest
@@ -672,7 +692,7 @@ private class CityIntegrationAPITest {
 
         System.assertEquals('error', result.status);
         System.assert(result.message.contains('Parent Id does not exist'));
-        System.assertEquals(404, RestContext.response.statusCode);
+        System.assertEquals(202, RestContext.response.statusCode);
     }
 
     @isTest
@@ -688,10 +708,7 @@ private class CityIntegrationAPITest {
         MPLResponse result = CityIntegrationAPI.handlePost();
         Test.stopTest();
 
-        System.assertEquals('error', result.status);
-        System.assert(result.message.contains('Unable to resolve'), 'Should report invalid status for resolution');
-        System.assert(result.message.contains('Reopen'), 'Should mention required Reopen status');
-        System.assertEquals(400, RestContext.response.statusCode);
+        System.assertEquals('success', result.status, 'Resolve should succeed regardless of current status');
     }
 
     @isTest
@@ -721,8 +738,8 @@ private class CityIntegrationAPITest {
         Test.stopTest();
 
         System.assertEquals('error', result.status);
-        System.assert(result.message.contains('Invalid Salesforce ID format'));
-        System.assertEquals(400, RestContext.response.statusCode);
+        System.assert(result.message.contains('Invalid Salesforce ID'));
+        System.assertEquals(202, RestContext.response.statusCode);
     }
 
     @isTest
@@ -739,7 +756,7 @@ private class CityIntegrationAPITest {
 
         System.assertEquals('error', result.status);
         System.assert(result.message.contains('Parent Id does not exist'));
-        System.assertEquals(404, RestContext.response.statusCode);
+        System.assertEquals(202, RestContext.response.statusCode);
     }
 
     @isTest
@@ -755,9 +772,9 @@ private class CityIntegrationAPITest {
         Test.stopTest();
 
         System.assertEquals('error', result.status);
-        System.assert(result.message.contains('not in a Resolved or Closed Status'),
+        System.assert(result.message.contains('not in a Resolved'),
                        'Should report invalid status for reopen');
-        System.assertEquals(400, RestContext.response.statusCode);
+        System.assertEquals(202, RestContext.response.statusCode);
     }
 
     @isTest
@@ -797,8 +814,8 @@ private class CityIntegrationAPITest {
         Test.stopTest();
 
         System.assertEquals('error', result.status);
-        System.assert(result.message.contains('Invalid Salesforce ID format'));
-        System.assertEquals(400, RestContext.response.statusCode);
+        System.assert(result.message.contains('Invalid Salesforce ID'));
+        System.assertEquals(202, RestContext.response.statusCode);
     }
 
     @isTest
@@ -838,7 +855,7 @@ private class CityIntegrationAPITest {
 
         System.assertEquals('error', result.status);
         System.assert(result.message.contains('Change request not found'));
-        System.assertEquals(404, RestContext.response.statusCode);
+        System.assertEquals(202, RestContext.response.statusCode);
     }
 
     @isTest
@@ -873,7 +890,7 @@ private class CityIntegrationAPITest {
 
         System.assertEquals('error', result.status);
         System.assert(result.message.contains('No Customer Approval participant found'));
-        System.assertEquals(404, RestContext.response.statusCode);
+        System.assertEquals(202, RestContext.response.statusCode);
     }
 
     @isTest
@@ -894,7 +911,7 @@ private class CityIntegrationAPITest {
 
         System.assertEquals('success', result.status);
         Case c = [SELECT Case_Type__c FROM Case WHERE Customer_Rec_Id__c = 'INC_NULL_CAT' LIMIT 1];
-        System.assertEquals('Standard', c.Case_Type__c, 'Null category should default to Standard');
+        System.assertEquals('Request', c.Case_Type__c, 'Null category should default to Request');
     }
 
     @isTest
@@ -935,7 +952,10 @@ private class CityIntegrationAPITest {
         System.assertEquals('success', result.status);
         System.assert(result.message.contains('Change request created successfully'));
 
-        Case parentCase = [SELECT Id FROM Case WHERE Customer_Rec_Id__c = 'CHG_NOTASK_001' LIMIT 1];
+        Id ecsRtId = Schema.SObjectType.Case.getRecordTypeInfosByDeveloperName().get('External_Customer_Support').getRecordTypeId();
+        Case parentCase = [SELECT Id, RecordTypeId, Case_Type__c FROM Case WHERE Customer_Rec_Id__c = 'CHG_NOTASK_001' LIMIT 1];
+        System.assertEquals(ecsRtId, parentCase.RecordTypeId, 'Parent should be ECS record type');
+        System.assertEquals('Request', parentCase.Case_Type__c, 'Parent Case_Type__c should be Request');
         List<Case> childTasks = [SELECT Id FROM Case WHERE ParentId = :parentCase.Id];
         System.assertEquals(0, childTasks.size(), 'No child tasks should be created');
     }
@@ -962,8 +982,9 @@ private class CityIntegrationAPITest {
 
         System.assertEquals('success', result.status);
         Case parentCase = [SELECT Id FROM Case WHERE Customer_Rec_Id__c = 'CHG_NULLTASK_001' LIMIT 1];
-        List<Case> childTasks = [SELECT Id FROM Case WHERE ParentId = :parentCase.Id];
+        List<Case> childTasks = [SELECT Id, Description FROM Case WHERE ParentId = :parentCase.Id];
         System.assertEquals(1, childTasks.size(), 'Task with null APITicketID should still be created');
+        System.assert(childTasks[0].Description.contains('Authorized Start Date/Time (Central Time):'), 'Child description should contain Authorized Start Date line even when Type is null');
     }
 
     @isTest
@@ -1003,7 +1024,7 @@ private class CityIntegrationAPITest {
 
         System.assertEquals('error', result.status);
         System.assert(result.message.contains('Required account not configured'));
-        System.assertEquals(500, RestContext.response.statusCode);
+        System.assertEquals(202, RestContext.response.statusCode);
     }
 
     @isTest
@@ -1027,7 +1048,7 @@ private class CityIntegrationAPITest {
 
         System.assertEquals('error', result.status);
         System.assert(result.message.contains('Required contact not found'));
-        System.assertEquals(500, RestContext.response.statusCode);
+        System.assertEquals(202, RestContext.response.statusCode);
     }
 
     @isTest
@@ -1048,9 +1069,9 @@ private class CityIntegrationAPITest {
         MPLResponse result = CityIntegrationAPI.handlePost();
         Test.stopTest();
 
-        System.assertEquals('error', result.status);
-        System.assert(result.message.contains('TOC Queue not found'));
-        System.assertEquals(500, RestContext.response.statusCode);
+        System.assertEquals('success', result.status, 'Change request should succeed even with a non-existent queue name');
+        System.assert(result.message.contains('Change request created successfully'),
+                       'Message should confirm change request creation');
     }
 
     @isTest
@@ -1098,5 +1119,9 @@ private class CityIntegrationAPITest {
         Test.stopTest();
 
         System.assertEquals('success', result.status);
+
+        Case parentCase = [SELECT Id, Description FROM Case WHERE Customer_Rec_Id__c = 'CHG_NULLPRI_001' LIMIT 1];
+        System.assert(parentCase.Description.startsWith('Authorized Start Date/Time (Central Time):'), 'Description should have date header even with null dates');
+        System.assert(parentCase.Description.contains('Null priority change'), 'Description should contain original description');
     }
 }

@@ -108,6 +108,19 @@ private class API_IncidentServiceTest {
         );
         insert fi;
 
+        Case chgCase = new Case(
+            Subject            = 'CHG Prefix Case',
+            Description        = 'Change request record',
+            Status             = 'New',
+            RecordTypeId       = extSupportRtId,
+            AccountId          = acc.Id,
+            ContactId          = con.Id,
+            Origin             = 'Phone',
+            Priority           = 'High',
+            Customer_Rec_Id__c = 'CHG0012345'
+        );
+        insert chgCase;
+
         Case minimalCase = new Case(
             Subject      = 'Minimal Incident',
             Status       = 'New',
@@ -383,6 +396,45 @@ private class API_IncidentServiceTest {
 
         System.assertEquals(null, resp,
             'updatePriorityOnIncidents should return null when Customer_Rec_Id__c is blank');
+    }
+
+    @isTest
+    static void test_updateIncidentStatus_nonIncPrefix_returnsNull() {
+        Case c = getCaseBySubject('CHG Prefix Case');
+
+        Test.startTest();
+        HttpRequestResponseModel.CRCreateResponse resp =
+            API_IncidentService.updateIncidentStatus(c);
+        Test.stopTest();
+
+        System.assertEquals(null, resp,
+            'updateIncidentStatus should return null when Customer_Rec_Id__c does not start with INC');
+    }
+
+    @isTest
+    static void test_resolveIncidents_nonIncPrefix_returnsNull() {
+        Case c = getCaseBySubject('CHG Prefix Case');
+
+        Test.startTest();
+        HttpRequestResponseModel.CRCreateResponse resp =
+            API_IncidentService.resolveIncidents(c);
+        Test.stopTest();
+
+        System.assertEquals(null, resp,
+            'resolveIncidents should return null when Customer_Rec_Id__c does not start with INC');
+    }
+
+    @isTest
+    static void test_updatePriorityOnIncidents_nonIncPrefix_returnsNull() {
+        Case c = getCaseBySubject('CHG Prefix Case');
+
+        Test.startTest();
+        HttpRequestResponseModel.CRCreateResponse resp =
+            API_IncidentService.updatePriorityOnIncidents(c);
+        Test.stopTest();
+
+        System.assertEquals(null, resp,
+            'updatePriorityOnIncidents should return null when Customer_Rec_Id__c does not start with INC');
     }
 
     @isTest
