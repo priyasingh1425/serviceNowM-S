@@ -60,14 +60,7 @@ public with sharing class ChangeRequestHandler {
             return;
         }
 
-        List<FeedItem> feedItems = [
-            SELECT Id, ParentId, Body, Visibility, Type
-            FROM FeedItem
-            WHERE ParentId IN :caseIds
-            AND Visibility = 'AllUsers'
-            AND Type = 'TextPost'
-            LIMIT 1000
-        ];
+        List<FeedItem> feedItems = new FeedItemQueryHelper().queryByCaseIds(caseIds);
 
         if (feedItems.isEmpty()) {
             return;
@@ -150,5 +143,18 @@ public with sharing class ChangeRequestHandler {
     private static Boolean isTaskEligibleForUpdate(Task oldTask, Task newTask) {
          return newTask.Customer_Rec_Id__c != null
              && (oldTask.Status != newTask.Status || String.valueOf(oldTask.Subject) != String.valueOf(newTask.Subject));
+    }
+
+    private without sharing class FeedItemQueryHelper {
+        public List<FeedItem> queryByCaseIds(Set<Id> caseIds) {
+            return [
+                SELECT Id, ParentId, Body, Visibility, Type
+                FROM FeedItem
+                WHERE ParentId IN :caseIds
+                AND Visibility = 'AllUsers'
+                AND Type = 'TextPost'
+                LIMIT 1000
+            ];
+        }
     }
 }
